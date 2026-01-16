@@ -1,3 +1,284 @@
-fn main() {
-    println!("Hello, world!");
+mod app;
+mod event;
+mod port;
+mod ui;
+
+use anyhow::Result;
+use app::{App, Filter, InputMode, Popup};
+use clap::{Parser, Subcommand};
+use crossterm::{
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use event::{handle_key, handle_popup_key, handle_search_key, Action, AppEvent, EventHandler};
+use ratatui::prelude::*;
+use std::io::{self, stdout};
+use std::time::Duration;
+
+#[derive(Parser)]
+#[command(name = "quay")]
+#[command(about = "A TUI port manager for local processes, SSH forwards, and Docker containers")]
+#[command(version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// List all ports (non-interactive)
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Show only local ports
+        #[arg(long)]
+        local: bool,
+        /// Show only SSH forwards
+        #[arg(long)]
+        ssh: bool,
+        /// Show only Docker ports
+        #[arg(long)]
+        docker: bool,
+    },
+    /// Create an SSH port forward
+    Forward {
+        /// Port specification (e.g., 8080:localhost:80)
+        spec: String,
+        /// Remote host
+        host: String,
+        /// Remote forward (-R instead of -L)
+        #[arg(short = 'R', long)]
+        remote: bool,
+    },
+    /// Kill process on a port
+    Kill {
+        /// Port number
+        port: u16,
+        /// Kill by PID instead of port
+        #[arg(long)]
+        pid: Option<u32>,
+    },
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Commands::List { json, local, ssh, docker }) => {
+            run_list(json, local, ssh, docker).await
+        }
+        Some(Commands::Forward { spec, host, remote }) => {
+            run_forward(&spec, &host, remote).await
+        }
+        Some(Commands::Kill { port, pid }) => {
+            run_kill(port, pid).await
+        }
+        None => run_tui().await,
+    }
+}
+
+async fn run_list(json: bool, local: bool, ssh: bool, docker: bool) -> Result<()> {
+    let entries = port::collect_all().await?;
+
+    let filtered: Vec<_> = entries
+        .into_iter()
+        .filter(|e| {
+            if local {
+                e.source == port::PortSource::Local
+            } else if ssh {
+                e.source == port::PortSource::Ssh
+            } else if docker {
+                e.source == port::PortSource::Docker
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    if json {
+        let json_entries: Vec<_> = filtered
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "source": format!("{:?}", e.source),
+                    "local_port": e.local_port,
+                    "remote_host": e.remote_host,
+                    "remote_port": e.remote_port,
+                    "process_name": e.process_name,
+                    "pid": e.pid,
+                    "container_id": e.container_id,
+                    "container_name": e.container_name,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json_entries)?);
+    } else {
+        println!("{:<8} {:<8} {:<20} {}", "TYPE", "LOCAL", "REMOTE", "PROCESS");
+        println!("{}", "-".repeat(60));
+        for entry in filtered {
+            println!(
+                "{:<8} :{:<7} {:<20} {}",
+                entry.source,
+                entry.local_port,
+                entry.remote_display(),
+                entry.process_display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_forward(spec: &str, host: &str, remote: bool) -> Result<()> {
+    let flag = if remote { "-R" } else { "-L" };
+    println!("Creating SSH forward: ssh {} {} {}", flag, spec, host);
+    println!("(Not yet implemented)");
+    Ok(())
+}
+
+async fn run_kill(port: u16, pid: Option<u32>) -> Result<()> {
+    if let Some(pid) = pid {
+        println!("Killing process with PID: {}...", pid);
+        port::kill_by_pid(pid)?;
+        println!("Done.");
+    } else {
+        println!("Killing process on port: {}...", port);
+        port::kill_by_port(port).await?;
+        println!("Done.");
+    }
+    Ok(())
+}
+
+async fn run_tui() -> Result<()> {
+    // Setup terminal
+    enable_raw_mode()?;
+    let mut stdout = stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Create app state
+    let mut app = App::new();
+
+    // Load initial data
+    if let Ok(entries) = port::collect_all().await {
+        app.set_entries(entries);
+    }
+
+    // Event handler
+    let event_handler = EventHandler::new(Duration::from_millis(250));
+
+    // Main loop
+    loop {
+        terminal.draw(|f| ui::draw(f, &app))?;
+
+        match event_handler.next()? {
+            AppEvent::Key(key) => {
+                // Handle popup first if one is open
+                if app.popup != Popup::None {
+                    if let Some(Action::ClosePopup) = handle_popup_key(key) {
+                        app.popup = Popup::None;
+                    }
+                    continue;
+                }
+
+                let action = match app.input_mode {
+                    InputMode::Search => handle_search_key(key, &mut app.search_query),
+                    InputMode::Normal => handle_key(key),
+                };
+
+                if let Some(action) = action {
+                    match action {
+                        Action::Quit => {
+                            app.should_quit = true;
+                        }
+                        Action::Up => app.previous(),
+                        Action::Down => app.next(),
+                        Action::First => app.first(),
+                        Action::Last => app.last(),
+                        Action::EnterSearch => {
+                            app.input_mode = InputMode::Search;
+                        }
+                        Action::ExitSearch => {
+                            app.input_mode = InputMode::Normal;
+                        }
+                        Action::UpdateSearch => {
+                            app.apply_filter();
+                        }
+                        Action::FilterAll => app.set_filter(Filter::All),
+                        Action::FilterLocal => app.set_filter(Filter::Local),
+                        Action::FilterSsh => app.set_filter(Filter::Ssh),
+                        Action::FilterDocker => app.set_filter(Filter::Docker),
+                        Action::Refresh => {
+                            if let Ok(entries) = port::collect_all().await {
+                                app.set_entries(entries);
+                            }
+                        }
+                        Action::Kill => {
+                            if let Some(entry) = app.selected_entry() {
+                                let port = entry.local_port;
+                                if port::kill_by_port(port).await.is_ok() {
+                                    // Refresh after kill
+                                    if let Ok(entries) = port::collect_all().await {
+                                        app.set_entries(entries);
+                                    }
+                                }
+                            }
+                        }
+                        Action::Select => {
+                            app.popup = Popup::Details;
+                        }
+                        Action::ShowHelp => {
+                            app.popup = Popup::Help;
+                        }
+                        Action::ClosePopup => {
+                            app.popup = Popup::None;
+                        }
+                    }
+                }
+            }
+            AppEvent::Tick => {}
+        }
+
+        if app.should_quit {
+            break;
+        }
+    }
+
+    // Restore terminal
+    disable_raw_mode()?;
+    execute!(io::stdout(), LeaveAlternateScreen)?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cli_parse_default() {
+        let cli = Cli::try_parse_from(["quay"]).unwrap();
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_parse_list() {
+        let cli = Cli::try_parse_from(["quay", "list", "--json"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::List { json: true, .. })));
+    }
+
+    #[test]
+    fn test_cli_parse_forward() {
+        let cli = Cli::try_parse_from(["quay", "forward", "8080:localhost:80", "remote-host"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Forward { .. })));
+    }
+
+    #[test]
+    fn test_cli_parse_kill() {
+        let cli = Cli::try_parse_from(["quay", "kill", "3000"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Kill { port: 3000, pid: None })));
+    }
 }
