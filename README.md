@@ -43,6 +43,12 @@ quay kill 3000
 
 # Kill by PID
 quay kill 3000 --pid 12345
+
+# Create SSH port forward
+quay forward 8080:localhost:80 remote-host
+
+# Create reverse SSH forward
+quay forward 8080:localhost:80 remote-host -R
 ```
 
 ## Keybindings
@@ -56,6 +62,7 @@ quay kill 3000 --pid 12345
 | `/` | Search mode |
 | `Enter` | Show details |
 | `K` | Kill selected process |
+| `f` | Create SSH forward |
 | `r` | Refresh |
 | `0` | Show all |
 | `1` | Local only |
@@ -79,7 +86,7 @@ quay kill 3000 --pid 12345
 │ SSH    │ :9000  │ localhost:80    │ ssh (pid:2345)          │
 │ DOCKER │ :5432  │ postgres:5432   │ postgres (abc123)       │
 ├─────────────────────────────────────────────────────────────┤
-│ [j/k] Navigate  [Enter] Details  [K] Kill  [?] Help  [q] Quit│
+│ [j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [q] Quit│
 └─────────────────────────────────────────────────────────────┘
 ```
 

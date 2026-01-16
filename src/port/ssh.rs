@@ -3,6 +3,18 @@ use anyhow::Result;
 use regex::Regex;
 use std::process::Command;
 
+/// Create an SSH port forward
+/// spec format: "local_port:remote_host:remote_port"
+pub fn create_forward(spec: &str, host: &str, remote: bool) -> Result<u32> {
+    let flag = if remote { "-R" } else { "-L" };
+
+    let child = Command::new("ssh")
+        .args(["-f", "-N", flag, spec, host])
+        .spawn()?;
+
+    Ok(child.id())
+}
+
 pub async fn collect() -> Result<Vec<PortEntry>> {
     let output = Command::new("ps").args(["aux"]).output()?;
 

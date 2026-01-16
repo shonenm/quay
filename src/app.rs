@@ -11,6 +11,70 @@ pub enum Popup {
     None,
     Details,
     Help,
+    Forward,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ForwardField {
+    #[default]
+    LocalPort,
+    RemoteHost,
+    RemotePort,
+    SshHost,
+}
+
+impl ForwardField {
+    pub fn next(self) -> Self {
+        match self {
+            ForwardField::LocalPort => ForwardField::RemoteHost,
+            ForwardField::RemoteHost => ForwardField::RemotePort,
+            ForwardField::RemotePort => ForwardField::SshHost,
+            ForwardField::SshHost => ForwardField::LocalPort,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            ForwardField::LocalPort => ForwardField::SshHost,
+            ForwardField::RemoteHost => ForwardField::LocalPort,
+            ForwardField::RemotePort => ForwardField::RemoteHost,
+            ForwardField::SshHost => ForwardField::RemotePort,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ForwardInput {
+    pub local_port: String,
+    pub remote_host: String,
+    pub remote_port: String,
+    pub ssh_host: String,
+    pub active_field: ForwardField,
+}
+
+impl ForwardInput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn active_value(&mut self) -> &mut String {
+        match self.active_field {
+            ForwardField::LocalPort => &mut self.local_port,
+            ForwardField::RemoteHost => &mut self.remote_host,
+            ForwardField::RemotePort => &mut self.remote_port,
+            ForwardField::SshHost => &mut self.ssh_host,
+        }
+    }
+
+    pub fn to_spec(&self) -> Option<(String, String)> {
+        let local_port: u16 = self.local_port.parse().ok()?;
+        let remote_port: u16 = self.remote_port.parse().ok()?;
+        if self.remote_host.is_empty() || self.ssh_host.is_empty() {
+            return None;
+        }
+        let spec = format!("{}:{}:{}", local_port, self.remote_host, remote_port);
+        Some((spec, self.ssh_host.clone()))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +94,7 @@ pub struct App {
     pub input_mode: InputMode,
     pub popup: Popup,
     pub should_quit: bool,
+    pub forward_input: ForwardInput,
 }
 
 impl App {
@@ -43,7 +108,12 @@ impl App {
             input_mode: InputMode::Normal,
             popup: Popup::None,
             should_quit: false,
+            forward_input: ForwardInput::new(),
         }
+    }
+
+    pub fn reset_forward_input(&mut self) {
+        self.forward_input = ForwardInput::new();
     }
 
     pub fn set_entries(&mut self, entries: Vec<PortEntry>) {

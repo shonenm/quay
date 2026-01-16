@@ -1,4 +1,4 @@
-use crate::app::{App, Filter, InputMode, Popup};
+use crate::app::{App, Filter, ForwardField, InputMode, Popup};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -27,6 +27,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     match app.popup {
         Popup::Details => draw_details_popup(frame, app),
         Popup::Help => draw_help_popup(frame),
+        Popup::Forward => draw_forward_popup(frame, app),
         Popup::None => {}
     }
 }
@@ -113,7 +114,7 @@ fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let help_text = match app.input_mode {
         InputMode::Search => "[Enter/Esc] Done  [Backspace] Delete",
-        InputMode::Normal => "[j/k] Navigate  [Enter] Details  [K] Kill  [r] Refresh  [?] Help  [q] Quit",
+        InputMode::Normal => "[j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [?] Help  [q] Quit",
     };
 
     let paragraph = Paragraph::new(help_text)
@@ -209,6 +210,7 @@ fn draw_help_popup(frame: &mut Frame) {
         Line::from(Span::styled("Actions", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from("  Enter   Show details"),
         Line::from("  K       Kill process"),
+        Line::from("  f       New SSH forward"),
         Line::from("  r       Refresh"),
         Line::from("  q/Esc   Quit"),
         Line::from(""),
@@ -225,5 +227,70 @@ fn draw_help_popup(frame: &mut Frame) {
                 .title("Help")
                 .style(Style::default().bg(Color::Black)),
         );
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_forward_popup(frame: &mut Frame, app: &App) {
+    let area = centered_rect(60, 50, frame.area());
+    frame.render_widget(Clear, area);
+
+    let input = &app.forward_input;
+    let active = input.active_field;
+
+    let field_style = |field: ForwardField| {
+        if field == active {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        }
+    };
+
+    let cursor = |field: ForwardField| {
+        if field == active {
+            Span::styled("_", Style::default().fg(Color::Yellow).add_modifier(Modifier::SLOW_BLINK))
+        } else {
+            Span::raw("")
+        }
+    };
+
+    let lines = vec![
+        Line::from(Span::styled(
+            "Create SSH Port Forward",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Local Port:  ", field_style(ForwardField::LocalPort)),
+            Span::raw(&input.local_port),
+            cursor(ForwardField::LocalPort),
+        ]),
+        Line::from(vec![
+            Span::styled("Remote Host: ", field_style(ForwardField::RemoteHost)),
+            Span::raw(&input.remote_host),
+            cursor(ForwardField::RemoteHost),
+        ]),
+        Line::from(vec![
+            Span::styled("Remote Port: ", field_style(ForwardField::RemotePort)),
+            Span::raw(&input.remote_port),
+            cursor(ForwardField::RemotePort),
+        ]),
+        Line::from(vec![
+            Span::styled("SSH Host:    ", field_style(ForwardField::SshHost)),
+            Span::raw(&input.ssh_host),
+            cursor(ForwardField::SshHost),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Tab/↑↓: Switch field  Enter: Create  Esc: Cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("New Forward")
+            .style(Style::default().bg(Color::Black)),
+    );
     frame.render_widget(paragraph, area);
 }

@@ -1,3 +1,4 @@
+use crate::app::ForwardInput;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
 
@@ -35,6 +36,7 @@ pub fn handle_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('/') => Some(Action::EnterSearch),
         KeyCode::Char('?') => Some(Action::ShowHelp),
         KeyCode::Char('r') => Some(Action::Refresh),
+        KeyCode::Char('f') => Some(Action::StartForward),
         KeyCode::Char('0') => Some(Action::FilterAll),
         KeyCode::Char('1') => Some(Action::FilterLocal),
         KeyCode::Char('2') => Some(Action::FilterSsh),
@@ -69,6 +71,30 @@ pub fn handle_search_key(key: KeyEvent, query: &mut String) -> Option<Action> {
     }
 }
 
+pub fn handle_forward_key(key: KeyEvent, input: &mut ForwardInput) -> Option<Action> {
+    match key.code {
+        KeyCode::Esc => Some(Action::ClosePopup),
+        KeyCode::Enter => Some(Action::SubmitForward),
+        KeyCode::Tab | KeyCode::Down => {
+            input.active_field = input.active_field.next();
+            None
+        }
+        KeyCode::BackTab | KeyCode::Up => {
+            input.active_field = input.active_field.prev();
+            None
+        }
+        KeyCode::Backspace => {
+            input.active_value().pop();
+            None
+        }
+        KeyCode::Char(c) => {
+            input.active_value().push(c);
+            None
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Action {
     Quit,
@@ -88,4 +114,6 @@ pub enum Action {
     Kill,
     ShowHelp,
     ClosePopup,
+    StartForward,
+    SubmitForward,
 }

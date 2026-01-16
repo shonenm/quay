@@ -110,6 +110,15 @@ cargo test
    cargo run -- list --local
    ```
 
+3. **SSH Forward**
+   ```bash
+   # Create forward via CLI
+   cargo run -- forward 8080:localhost:80 user@host
+
+   # Create forward via TUI
+   # Press 'f' to open forward dialog
+   ```
+
 ## Adding Features
 
 ### New Port Source

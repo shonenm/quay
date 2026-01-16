@@ -60,8 +60,17 @@ pub struct App {
     pub filter: Filter,                   // All|Local|Ssh|Docker
     pub search_query: String,
     pub input_mode: InputMode,            // Normal|Search
-    pub popup: Popup,                     // None|Details|Help
+    pub popup: Popup,                     // None|Details|Help|Forward
     pub should_quit: bool,
+    pub forward_input: ForwardInput,      // SSH forward creation form
+}
+
+pub struct ForwardInput {
+    pub local_port: String,
+    pub remote_host: String,
+    pub remote_port: String,
+    pub ssh_host: String,
+    pub active_field: ForwardField,       // Currently focused field
 }
 ```
 
@@ -121,20 +130,29 @@ abc123def456  postgres  0.0.0.0:5432->5432/tcp
 
 ### SSH Forwards
 
+Detection:
 ```bash
 ps aux | grep 'ssh.*-[LR]'
 ```
 
 Detects `-L` (local) and `-R` (remote) forwards.
 
+Creation:
+```bash
+ssh -f -N -L local_port:remote_host:remote_port ssh_host
+```
+
+Creates background SSH process with port forwarding.
+
 ## Key Modules
 
 ### event.rs
 
-Three handler functions:
+Four handler functions:
 - `handle_key()` - Normal mode key handling
 - `handle_search_key()` - Search mode input
 - `handle_popup_key()` - Popup dismissal
+- `handle_forward_key()` - Forward creation form input
 
 ### ui.rs
 

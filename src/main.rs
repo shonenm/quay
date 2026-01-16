@@ -10,7 +10,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use event::{handle_key, handle_popup_key, handle_search_key, Action, AppEvent, EventHandler};
+use event::{handle_forward_key, handle_key, handle_popup_key, handle_search_key, Action, AppEvent, EventHandler};
 use ratatui::prelude::*;
 use std::io::{self, stdout};
 use std::time::Duration;
@@ -115,7 +115,7 @@ async fn run_list(json: bool, local: bool, ssh: bool, docker: bool) -> Result<()
             .collect();
         println!("{}", serde_json::to_string_pretty(&json_entries)?);
     } else {
-        println!("{:<8} {:<8} {:<20} {}", "TYPE", "LOCAL", "REMOTE", "PROCESS");
+        println!("{:<8} {:<8} {:<20} PROCESS", "TYPE", "LOCAL", "REMOTE");
         println!("{}", "-".repeat(60));
         for entry in filtered {
             println!(
@@ -133,9 +133,18 @@ async fn run_list(json: bool, local: bool, ssh: bool, docker: bool) -> Result<()
 
 async fn run_forward(spec: &str, host: &str, remote: bool) -> Result<()> {
     let flag = if remote { "-R" } else { "-L" };
-    println!("Creating SSH forward: ssh {} {} {}", flag, spec, host);
-    println!("(Not yet implemented)");
-    Ok(())
+    println!("Creating SSH forward: ssh -f -N {} {} {}", flag, spec, host);
+
+    match port::ssh::create_forward(spec, host, remote) {
+        Ok(pid) => {
+            println!("Started with PID: {}", pid);
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("Failed to create forward: {}", e);
+            Err(e)
+        }
+    }
 }
 
 async fn run_kill(port: u16, pid: Option<u32>) -> Result<()> {
@@ -176,7 +185,33 @@ async fn run_tui() -> Result<()> {
 
         match event_handler.next()? {
             AppEvent::Key(key) => {
-                // Handle popup first if one is open
+                // Handle Forward popup specially (needs input handling)
+                if app.popup == Popup::Forward {
+                    if let Some(action) = handle_forward_key(key, &mut app.forward_input) {
+                        match action {
+                            Action::ClosePopup => {
+                                app.popup = Popup::None;
+                                app.reset_forward_input();
+                            }
+                            Action::SubmitForward => {
+                                if let Some((spec, host)) = app.forward_input.to_spec() {
+                                    if port::ssh::create_forward(&spec, &host, false).is_ok() {
+                                        // Refresh after creating forward
+                                        if let Ok(entries) = port::collect_all().await {
+                                            app.set_entries(entries);
+                                        }
+                                    }
+                                }
+                                app.popup = Popup::None;
+                                app.reset_forward_input();
+                            }
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
+
+                // Handle other popups
                 if app.popup != Popup::None {
                     if let Some(Action::ClosePopup) = handle_popup_key(key) {
                         app.popup = Popup::None;
@@ -233,8 +268,14 @@ async fn run_tui() -> Result<()> {
                         Action::ShowHelp => {
                             app.popup = Popup::Help;
                         }
+                        Action::StartForward => {
+                            app.popup = Popup::Forward;
+                        }
                         Action::ClosePopup => {
                             app.popup = Popup::None;
+                        }
+                        Action::SubmitForward => {
+                            // Handled in Forward popup handler above
                         }
                     }
                 }
