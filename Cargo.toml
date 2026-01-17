@@ -29,6 +29,10 @@ clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 regex = "1"
 
+# Config
+toml = "0.8"
+dirs = "5"
+
 [profile.release]
 opt-level = 3
 lto = true

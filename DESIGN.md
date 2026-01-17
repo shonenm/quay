@@ -195,7 +195,7 @@ quay kill --pid 1234  # PIDで
 18. [ ] Homebrew formula (optional)
 
 ### Phase 6: 拡張機能
-19. [ ] 設定ファイル基盤 (config.rs)
+19. [x] 設定ファイル基盤 (config.rs)
     - `~/.config/quay/config.toml`
     - auto_refresh, refresh_interval, default_filter, mouse_enabled
 20. [ ] SSHフォワードプリセット (preset.rs)

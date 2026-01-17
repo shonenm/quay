@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod event;
 mod port;
 mod ui;
@@ -170,6 +171,16 @@ async fn run_tui() -> Result<()> {
 
     // Create app state
     let mut app = App::new();
+
+    // Load config and apply settings
+    let config = config::Config::load();
+    app.auto_refresh = config.general.auto_refresh;
+    match config.general.default_filter.as_str() {
+        "local" => app.filter = Filter::Local,
+        "ssh" => app.filter = Filter::Ssh,
+        "docker" => app.filter = Filter::Docker,
+        _ => app.filter = Filter::All,
+    }
 
     // Load initial data
     if let Ok(entries) = port::collect_all().await {
