@@ -100,6 +100,7 @@ cargo test
    cargo run
    ```
    - Press `j`/`k` to navigate
+   - Press `a` to toggle auto-refresh
    - Press `?` for help
    - Press `q` to quit
 

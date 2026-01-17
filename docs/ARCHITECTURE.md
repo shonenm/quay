@@ -63,6 +63,9 @@ pub struct App {
     pub popup: Popup,                     // None|Details|Help|Forward
     pub should_quit: bool,
     pub forward_input: ForwardInput,      // SSH forward creation form
+    pub auto_refresh: bool,               // Auto-refresh enabled
+    pub tick_count: u32,                  // Tick counter for refresh
+    pub status_message: Option<(String, u32)>, // Status with TTL
 }
 
 pub struct ForwardInput {
