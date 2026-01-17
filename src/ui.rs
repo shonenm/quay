@@ -47,6 +47,12 @@ fn draw_filter_bar(frame: &mut Frame, app: &App, area: Rect) {
         Filter::Docker => "[3] Docker",
     };
 
+    let auto_refresh_indicator = if app.auto_refresh {
+        Span::styled(" [A] Auto", Style::default().fg(Color::Green))
+    } else {
+        Span::styled(" [a] auto", Style::default().fg(Color::DarkGray))
+    };
+
     let content = match app.input_mode {
         InputMode::Search => {
             vec![
@@ -59,6 +65,7 @@ fn draw_filter_bar(frame: &mut Frame, app: &App, area: Rect) {
             vec![
                 Span::raw("Filter: "),
                 Span::styled(filter_text, Style::default().fg(Color::Green)),
+                auto_refresh_indicator,
                 Span::raw("  [/] search  [?] help"),
             ]
         }
@@ -112,13 +119,18 @@ fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
-    let help_text = match app.input_mode {
-        InputMode::Search => "[Enter/Esc] Done  [Backspace] Delete",
-        InputMode::Normal => "[j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [?] Help  [q] Quit",
+    // Show status message if present, otherwise show help text
+    let content = if let Some((ref message, _)) = app.status_message {
+        Line::from(Span::styled(message, Style::default().fg(Color::Yellow)))
+    } else {
+        let help_text = match app.input_mode {
+            InputMode::Search => "[Enter/Esc] Done  [Backspace] Delete",
+            InputMode::Normal => "[j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [?] Help  [q] Quit",
+        };
+        Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)))
     };
 
-    let paragraph = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray));
+    let paragraph = Paragraph::new(content);
     frame.render_widget(paragraph, area);
 }
 
@@ -212,6 +224,7 @@ fn draw_help_popup(frame: &mut Frame) {
         Line::from("  K       Kill process"),
         Line::from("  f       New SSH forward"),
         Line::from("  r       Refresh"),
+        Line::from("  a       Toggle auto-refresh"),
         Line::from("  q/Esc   Quit"),
         Line::from(""),
         Line::from(vec![

@@ -64,6 +64,7 @@ quay forward 8080:localhost:80 remote-host -R
 | `K` | Kill selected process |
 | `f` | Create SSH forward |
 | `r` | Refresh |
+| `a` | Toggle auto-refresh |
 | `0` | Show all |
 | `1` | Local only |
 | `2` | SSH only |

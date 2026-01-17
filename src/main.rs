@@ -195,12 +195,19 @@ async fn run_tui() -> Result<()> {
                             }
                             Action::SubmitForward => {
                                 if let Some((spec, host)) = app.forward_input.to_spec() {
-                                    if port::ssh::create_forward(&spec, &host, false).is_ok() {
-                                        // Refresh after creating forward
-                                        if let Ok(entries) = port::collect_all().await {
-                                            app.set_entries(entries);
+                                    match port::ssh::create_forward(&spec, &host, false) {
+                                        Ok(pid) => {
+                                            app.set_status(&format!("Forward created (PID: {})", pid));
+                                            if let Ok(entries) = port::collect_all().await {
+                                                app.set_entries(entries);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            app.set_status(&format!("Forward failed: {}", e));
                                         }
                                     }
+                                } else {
+                                    app.set_status("Invalid forward specification");
                                 }
                                 app.popup = Popup::None;
                                 app.reset_forward_input();
@@ -249,15 +256,29 @@ async fn run_tui() -> Result<()> {
                         Action::Refresh => {
                             if let Ok(entries) = port::collect_all().await {
                                 app.set_entries(entries);
+                                app.set_status("Refreshed");
+                            }
+                        }
+                        Action::ToggleAutoRefresh => {
+                            app.auto_refresh = !app.auto_refresh;
+                            if app.auto_refresh {
+                                app.set_status("Auto-refresh ON");
+                            } else {
+                                app.set_status("Auto-refresh OFF");
                             }
                         }
                         Action::Kill => {
                             if let Some(entry) = app.selected_entry() {
                                 let port = entry.local_port;
-                                if port::kill_by_port(port).await.is_ok() {
-                                    // Refresh after kill
-                                    if let Ok(entries) = port::collect_all().await {
-                                        app.set_entries(entries);
+                                match port::kill_by_port(port).await {
+                                    Ok(_) => {
+                                        app.set_status(&format!("Killed process on port {}", port));
+                                        if let Ok(entries) = port::collect_all().await {
+                                            app.set_entries(entries);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        app.set_status(&format!("Kill failed: {}", e));
                                     }
                                 }
                             }
@@ -280,7 +301,14 @@ async fn run_tui() -> Result<()> {
                     }
                 }
             }
-            AppEvent::Tick => {}
+            AppEvent::Tick => {
+                app.tick();
+                if app.should_refresh() {
+                    if let Ok(entries) = port::collect_all().await {
+                        app.set_entries(entries);
+                    }
+                }
+            }
         }
 
         if app.should_quit {

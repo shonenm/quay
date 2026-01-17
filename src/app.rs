@@ -95,6 +95,9 @@ pub struct App {
     pub popup: Popup,
     pub should_quit: bool,
     pub forward_input: ForwardInput,
+    pub auto_refresh: bool,
+    pub tick_count: u32,
+    pub status_message: Option<(String, u32)>, // (message, ticks_remaining)
 }
 
 impl App {
@@ -109,7 +112,32 @@ impl App {
             popup: Popup::None,
             should_quit: false,
             forward_input: ForwardInput::new(),
+            auto_refresh: false,
+            tick_count: 0,
+            status_message: None,
         }
+    }
+
+    pub fn set_status(&mut self, message: &str) {
+        // Show message for ~3 seconds (12 ticks at 250ms)
+        self.status_message = Some((message.to_string(), 12));
+    }
+
+    pub fn tick(&mut self) {
+        self.tick_count = self.tick_count.wrapping_add(1);
+        // Decrement status message timer
+        if let Some((_, ref mut ticks)) = self.status_message {
+            if *ticks > 0 {
+                *ticks -= 1;
+            } else {
+                self.status_message = None;
+            }
+        }
+    }
+
+    pub fn should_refresh(&self) -> bool {
+        // Refresh every 20 ticks (~5 seconds at 250ms tick rate)
+        self.auto_refresh && self.tick_count.is_multiple_of(20)
     }
 
     pub fn reset_forward_input(&mut self) {
