@@ -194,6 +194,17 @@ quay kill --pid 1234  # PIDで
 17. [ ] README
 18. [ ] Homebrew formula (optional)
 
+### Phase 6: 拡張機能
+19. [ ] 設定ファイル基盤 (config.rs)
+    - `~/.config/quay/config.toml`
+    - auto_refresh, refresh_interval, default_filter, mouse_enabled
+20. [ ] SSHフォワードプリセット (preset.rs)
+    - `~/.config/quay/presets.toml`
+    - `p` キーでプリセット一覧表示
+21. [ ] マウスサポート
+    - クリックで行選択、スクロールでリスト移動
+22. [ ] ドキュメント更新
+
 ## 参考
 
 - [ratatui](https://github.com/ratatui/ratatui) - Rust TUI library
