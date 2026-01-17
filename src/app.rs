@@ -1,4 +1,5 @@
 use crate::port::{PortEntry, PortSource};
+use crate::preset::Preset;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -12,6 +13,7 @@ pub enum Popup {
     Details,
     Help,
     Forward,
+    Presets,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -98,6 +100,8 @@ pub struct App {
     pub auto_refresh: bool,
     pub tick_count: u32,
     pub status_message: Option<(String, u32)>, // (message, ticks_remaining)
+    pub presets: Vec<Preset>,
+    pub preset_selected: usize,
 }
 
 impl App {
@@ -115,7 +119,28 @@ impl App {
             auto_refresh: false,
             tick_count: 0,
             status_message: None,
+            presets: Vec::new(),
+            preset_selected: 0,
         }
+    }
+
+    pub fn preset_next(&mut self) {
+        if !self.presets.is_empty() {
+            self.preset_selected = (self.preset_selected + 1) % self.presets.len();
+        }
+    }
+
+    pub fn preset_previous(&mut self) {
+        if !self.presets.is_empty() {
+            self.preset_selected = self
+                .preset_selected
+                .checked_sub(1)
+                .unwrap_or(self.presets.len() - 1);
+        }
+    }
+
+    pub fn selected_preset(&self) -> Option<&Preset> {
+        self.presets.get(self.preset_selected)
     }
 
     pub fn set_status(&mut self, message: &str) {

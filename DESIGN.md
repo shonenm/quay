@@ -198,7 +198,7 @@ quay kill --pid 1234  # PIDで
 19. [x] 設定ファイル基盤 (config.rs)
     - `~/.config/quay/config.toml`
     - auto_refresh, refresh_interval, default_filter, mouse_enabled
-20. [ ] SSHフォワードプリセット (preset.rs)
+20. [x] SSHフォワードプリセット (preset.rs)
     - `~/.config/quay/presets.toml`
     - `p` キーでプリセット一覧表示
 21. [ ] マウスサポート

@@ -2,6 +2,7 @@ mod app;
 mod config;
 mod event;
 mod port;
+mod preset;
 mod ui;
 
 use anyhow::Result;
@@ -11,7 +12,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use event::{handle_forward_key, handle_key, handle_popup_key, handle_search_key, Action, AppEvent, EventHandler};
+use event::{handle_forward_key, handle_key, handle_popup_key, handle_preset_key, handle_search_key, Action, AppEvent, EventHandler};
 use ratatui::prelude::*;
 use std::io::{self, stdout};
 use std::time::Duration;
@@ -182,6 +183,10 @@ async fn run_tui() -> Result<()> {
         _ => app.filter = Filter::All,
     }
 
+    // Load presets
+    let presets = preset::Presets::load();
+    app.presets = presets.preset;
+
     // Load initial data
     if let Ok(entries) = port::collect_all().await {
         app.set_entries(entries);
@@ -222,6 +227,39 @@ async fn run_tui() -> Result<()> {
                                 }
                                 app.popup = Popup::None;
                                 app.reset_forward_input();
+                            }
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
+
+                // Handle Presets popup
+                if app.popup == Popup::Presets {
+                    if let Some(action) = handle_preset_key(key) {
+                        match action {
+                            Action::ClosePopup => {
+                                app.popup = Popup::None;
+                            }
+                            Action::Up => app.preset_previous(),
+                            Action::Down => app.preset_next(),
+                            Action::LaunchPreset => {
+                                if let Some(preset) = app.selected_preset() {
+                                    let spec = format!("{}:{}:{}", preset.local_port, preset.remote_host, preset.remote_port);
+                                    let host = preset.ssh_host.clone();
+                                    match port::ssh::create_forward(&spec, &host, false) {
+                                        Ok(pid) => {
+                                            app.set_status(&format!("Forward created (PID: {})", pid));
+                                            if let Ok(entries) = port::collect_all().await {
+                                                app.set_entries(entries);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            app.set_status(&format!("Forward failed: {}", e));
+                                        }
+                                    }
+                                }
+                                app.popup = Popup::None;
                             }
                             _ => {}
                         }
@@ -303,11 +341,15 @@ async fn run_tui() -> Result<()> {
                         Action::StartForward => {
                             app.popup = Popup::Forward;
                         }
+                        Action::ShowPresets => {
+                            app.preset_selected = 0;
+                            app.popup = Popup::Presets;
+                        }
                         Action::ClosePopup => {
                             app.popup = Popup::None;
                         }
-                        Action::SubmitForward => {
-                            // Handled in Forward popup handler above
+                        Action::SubmitForward | Action::LaunchPreset => {
+                            // Handled in popup handlers above
                         }
                     }
                 }

@@ -28,6 +28,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Popup::Details => draw_details_popup(frame, app),
         Popup::Help => draw_help_popup(frame),
         Popup::Forward => draw_forward_popup(frame, app),
+        Popup::Presets => draw_presets_popup(frame, app),
         Popup::None => {}
     }
 }
@@ -303,6 +304,90 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
         Block::default()
             .borders(Borders::ALL)
             .title("New Forward")
+            .style(Style::default().bg(Color::Black)),
+    );
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_presets_popup(frame: &mut Frame, app: &App) {
+    let area = centered_rect(60, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    if app.presets.is_empty() {
+        let lines = vec![
+            Line::from(Span::styled(
+                "No Presets",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from("Create presets in:"),
+            Line::from(Span::styled(
+                "~/.config/quay/presets.toml",
+                Style::default().fg(Color::Cyan),
+            )),
+            Line::from(""),
+            Line::from("Example:"),
+            Line::from(Span::styled("[[preset]]", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled("name = \"My Server\"", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled("local_port = 8080", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled("remote_host = \"localhost\"", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled("remote_port = 80", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled("ssh_host = \"myserver\"", Style::default().fg(Color::DarkGray))),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("[Esc] ", Style::default().fg(Color::DarkGray)),
+                Span::raw("Close"),
+            ]),
+        ];
+
+        let paragraph = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Presets")
+                .style(Style::default().bg(Color::Black)),
+        );
+        frame.render_widget(paragraph, area);
+        return;
+    }
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "SSH Forward Presets",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    for (i, preset) in app.presets.iter().enumerate() {
+        let is_selected = i == app.preset_selected;
+        let prefix = if is_selected { "> " } else { "  " };
+        let style = if is_selected {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        let key_str = preset.key.as_ref().map(|k| format!("[{}] ", k)).unwrap_or_default();
+        lines.push(Line::from(Span::styled(
+            format!("{}{}{}", prefix, key_str, preset.name),
+            style,
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("    {}:{} -> {}:{}", preset.local_port, preset.ssh_host, preset.remote_host, preset.remote_port),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "j/k: Navigate  Enter: Launch  Esc: Cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Presets")
             .style(Style::default().bg(Color::Black)),
     );
     frame.render_widget(paragraph, area);

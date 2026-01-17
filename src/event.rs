@@ -38,6 +38,7 @@ pub fn handle_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('r') => Some(Action::Refresh),
         KeyCode::Char('a') => Some(Action::ToggleAutoRefresh),
         KeyCode::Char('f') => Some(Action::StartForward),
+        KeyCode::Char('p') => Some(Action::ShowPresets),
         KeyCode::Char('0') => Some(Action::FilterAll),
         KeyCode::Char('1') => Some(Action::FilterLocal),
         KeyCode::Char('2') => Some(Action::FilterSsh),
@@ -96,6 +97,16 @@ pub fn handle_forward_key(key: KeyEvent, input: &mut ForwardInput) -> Option<Act
     }
 }
 
+pub fn handle_preset_key(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => Some(Action::ClosePopup),
+        KeyCode::Enter => Some(Action::LaunchPreset),
+        KeyCode::Char('j') | KeyCode::Down => Some(Action::Down),
+        KeyCode::Char('k') | KeyCode::Up => Some(Action::Up),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Action {
     Quit,
@@ -118,4 +129,6 @@ pub enum Action {
     ClosePopup,
     StartForward,
     SubmitForward,
+    ShowPresets,
+    LaunchPreset,
 }
