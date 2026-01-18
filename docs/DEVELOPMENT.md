@@ -36,7 +36,9 @@ quay/
 └── src/
     ├── main.rs       # Entry point
     ├── app.rs        # State management
-    ├── event.rs      # Key handling
+    ├── config.rs     # Configuration handling
+    ├── event.rs      # Event handling
+    ├── preset.rs     # SSH presets
     ├── ui.rs         # UI rendering
     └── port/         # Port collection modules
 ```
@@ -119,6 +121,43 @@ cargo test
    # Create forward via TUI
    # Press 'f' to open forward dialog
    ```
+
+## Configuration
+
+Configuration files are stored in `~/.config/quay/`.
+
+### Creating Config Directory
+
+```bash
+mkdir -p ~/.config/quay
+```
+
+### config.toml
+
+```bash
+cat > ~/.config/quay/config.toml << 'EOF'
+[general]
+auto_refresh = true
+refresh_interval = 5
+default_filter = "all"
+
+[ui]
+mouse_enabled = true
+EOF
+```
+
+### presets.toml
+
+```bash
+cat > ~/.config/quay/presets.toml << 'EOF'
+[[preset]]
+name = "Example DB"
+local_port = 5432
+remote_host = "localhost"
+remote_port = 5432
+ssh_host = "bastion-host"
+EOF
+```
 
 ## Adding Features
 

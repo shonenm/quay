@@ -63,6 +63,7 @@ quay forward 8080:localhost:80 remote-host -R
 | `Enter` | Show details |
 | `K` | Kill selected process |
 | `f` | Create SSH forward |
+| `p` | Open presets |
 | `r` | Refresh |
 | `a` | Toggle auto-refresh |
 | `0` | Show all |
@@ -89,6 +90,41 @@ quay forward 8080:localhost:80 remote-host -R
 ├─────────────────────────────────────────────────────────────┤
 │ [j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [q] Quit│
 └─────────────────────────────────────────────────────────────┘
+```
+
+## Configuration
+
+Configuration files are stored in `~/.config/quay/`.
+
+### config.toml
+
+```toml
+[general]
+auto_refresh = true
+refresh_interval = 5
+default_filter = "all"  # all, local, ssh, docker
+
+[ui]
+mouse_enabled = true
+```
+
+### presets.toml
+
+```toml
+[[preset]]
+name = "Production DB"
+key = "1"
+local_port = 5432
+remote_host = "localhost"
+remote_port = 5432
+ssh_host = "prod-bastion"
+
+[[preset]]
+name = "Staging Redis"
+local_port = 6379
+remote_host = "localhost"
+remote_port = 6379
+ssh_host = "staging-bastion"
 ```
 
 ## Requirements

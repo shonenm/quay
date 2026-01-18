@@ -10,7 +10,10 @@ Quay is a TUI port manager that displays local processes, SSH port forwards, and
 │                    (CLI + TUI entry)                        │
 ├─────────────────────────────────────────────────────────────┤
 │     app.rs      │     event.rs      │       ui.rs          │
-│  (App State)    │  (Key Handling)   │   (UI Rendering)     │
+│  (App State)    │  (Event Handling) │   (UI Rendering)     │
+├─────────────────────────────────────────────────────────────┤
+│   config.rs     │    preset.rs                              │
+│  (Settings)     │   (SSH Presets)                           │
 ├─────────────────────────────────────────────────────────────┤
 │                       port/                                 │
 │    local.rs    │    docker.rs    │      ssh.rs             │
@@ -24,7 +27,9 @@ Quay is a TUI port manager that displays local processes, SSH port forwards, and
 src/
 ├── main.rs           # Entry point, CLI parsing, TUI loop
 ├── app.rs            # Application state (App struct)
-├── event.rs          # Keyboard event handling
+├── config.rs         # Configuration file handling
+├── event.rs          # Keyboard/mouse event handling
+├── preset.rs         # SSH forward presets
 ├── ui.rs             # UI rendering with ratatui
 └── port/
     ├── mod.rs        # PortEntry, PortSource, collect_all()
@@ -60,12 +65,14 @@ pub struct App {
     pub filter: Filter,                   // All|Local|Ssh|Docker
     pub search_query: String,
     pub input_mode: InputMode,            // Normal|Search
-    pub popup: Popup,                     // None|Details|Help|Forward
+    pub popup: Popup,                     // None|Details|Help|Forward|Presets
     pub should_quit: bool,
     pub forward_input: ForwardInput,      // SSH forward creation form
     pub auto_refresh: bool,               // Auto-refresh enabled
     pub tick_count: u32,                  // Tick counter for refresh
     pub status_message: Option<(String, u32)>, // Status with TTL
+    pub presets: Vec<Preset>,             // SSH forward presets
+    pub preset_selected: usize,           // Selected preset index
 }
 
 pub struct ForwardInput {
@@ -151,11 +158,13 @@ Creates background SSH process with port forwarding.
 
 ### event.rs
 
-Four handler functions:
+Event handler functions:
 - `handle_key()` - Normal mode key handling
 - `handle_search_key()` - Search mode input
 - `handle_popup_key()` - Popup dismissal
 - `handle_forward_key()` - Forward creation form input
+- `handle_preset_key()` - Preset selection
+- `handle_mouse()` - Mouse click and scroll handling
 
 ### ui.rs
 
@@ -184,3 +193,5 @@ Popup rendering uses `centered_rect()` for modal positioning.
 | tokio | Async runtime |
 | regex | Port string parsing |
 | anyhow | Error handling |
+| toml | Config file parsing |
+| dirs | Config directory paths |
