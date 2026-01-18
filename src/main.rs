@@ -9,10 +9,11 @@ use anyhow::Result;
 use app::{App, Filter, InputMode, Popup};
 use clap::{Parser, Subcommand};
 use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use event::{handle_forward_key, handle_key, handle_popup_key, handle_preset_key, handle_search_key, Action, AppEvent, EventHandler};
+use event::{handle_forward_key, handle_key, handle_mouse, handle_popup_key, handle_preset_key, handle_search_key, Action, AppEvent, EventHandler};
 use ratatui::prelude::*;
 use std::io::{self, stdout};
 use std::time::Duration;
@@ -166,7 +167,7 @@ async fn run_tui() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -348,8 +349,30 @@ async fn run_tui() -> Result<()> {
                         Action::ClosePopup => {
                             app.popup = Popup::None;
                         }
-                        Action::SubmitForward | Action::LaunchPreset => {
-                            // Handled in popup handlers above
+                        Action::SubmitForward | Action::LaunchPreset | Action::SelectRow(_) => {
+                            // Handled elsewhere (popup handlers or mouse handler)
+                        }
+                    }
+                }
+            }
+            AppEvent::Mouse(mouse) => {
+                // Only handle mouse in normal mode without popup
+                if app.popup == Popup::None && app.input_mode == InputMode::Normal {
+                    // Calculate table area: header(3) + filter(3) = 6 rows before table
+                    let table_top = 6_u16;
+                    let term_height = terminal.size()?.height;
+                    let table_height = term_height.saturating_sub(8); // minus header, filter, footer
+
+                    if let Some(action) = handle_mouse(mouse, table_top, table_height) {
+                        match action {
+                            Action::Up => app.previous(),
+                            Action::Down => app.next(),
+                            Action::SelectRow(row) => {
+                                if row < app.filtered_entries.len() {
+                                    app.selected = row;
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -371,7 +394,7 @@ async fn run_tui() -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
+    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
 
     Ok(())
 }

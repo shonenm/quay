@@ -1,9 +1,10 @@
 use crate::app::ForwardInput;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use std::time::Duration;
 
 pub enum AppEvent {
     Key(KeyEvent),
+    Mouse(MouseEvent),
     Tick,
 }
 
@@ -18,8 +19,10 @@ impl EventHandler {
 
     pub fn next(&self) -> anyhow::Result<AppEvent> {
         if event::poll(self.tick_rate)? {
-            if let Event::Key(key) = event::read()? {
-                return Ok(AppEvent::Key(key));
+            match event::read()? {
+                Event::Key(key) => return Ok(AppEvent::Key(key)),
+                Event::Mouse(mouse) => return Ok(AppEvent::Mouse(mouse)),
+                _ => {}
             }
         }
         Ok(AppEvent::Tick)
@@ -107,6 +110,22 @@ pub fn handle_preset_key(key: KeyEvent) -> Option<Action> {
     }
 }
 
+pub fn handle_mouse(event: MouseEvent, table_top: u16, table_height: u16) -> Option<Action> {
+    match event.kind {
+        MouseEventKind::Down(_) => {
+            // Check if click is within table area (accounting for header row)
+            if event.row > table_top && event.row < table_top + table_height {
+                let row_index = (event.row - table_top - 1) as usize; // -1 for header
+                return Some(Action::SelectRow(row_index));
+            }
+            None
+        }
+        MouseEventKind::ScrollDown => Some(Action::Down),
+        MouseEventKind::ScrollUp => Some(Action::Up),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Action {
     Quit,
@@ -115,6 +134,7 @@ pub enum Action {
     First,
     Last,
     Select,
+    SelectRow(usize),
     Refresh,
     ToggleAutoRefresh,
     EnterSearch,
