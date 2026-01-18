@@ -5,6 +5,11 @@ edition = "2021"
 description = "A TUI port manager for local processes, SSH forwards, and Docker containers"
 authors = ["matsushimakouta"]
 license = "MIT"
+repository = "https://github.com/shonenm/quay"
+homepage = "https://github.com/shonenm/quay"
+readme = "README.md"
+keywords = ["tui", "port-manager", "docker", "ssh", "ratatui"]
+categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 # TUI
@@ -33,7 +38,26 @@ regex = "1"
 toml = "0.8"
 dirs = "5"
 
+# cargo-dist configuration
+[package.metadata.dist]
+cargo-dist-version = "0.27.0"
+ci = "github"
+targets = [
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin"
+]
+installers = ["shell", "homebrew"]
+tap = "shonenm/homebrew-quay"
+publish-jobs = ["homebrew"]
+checksum = "sha256"
+
 [profile.release]
 opt-level = 3
 lto = true
 strip = true
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
