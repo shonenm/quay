@@ -1,0 +1,54 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:base",
+    ":semanticCommits",
+    ":preserveSemverRanges"
+  ],
+  "labels": ["dependencies"],
+  "rangeStrategy": "bump",
+  "packageRules": [
+    {
+      "description": "Group TUI-related dependencies",
+      "matchPackagePatterns": ["^ratatui", "^crossterm", "^tui-"],
+      "groupName": "tui-stack"
+    },
+    {
+      "description": "Group async runtime dependencies",
+      "matchPackagePatterns": ["^tokio"],
+      "groupName": "async-runtime"
+    },
+    {
+      "description": "Group serialization dependencies",
+      "matchPackagePatterns": ["^serde", "^toml"],
+      "groupName": "serialization"
+    },
+    {
+      "description": "Auto-merge minor/patch updates for dev dependencies",
+      "matchDepTypes": ["devDependencies"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "description": "Group all non-major dependencies",
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "all non-major dependencies",
+      "schedule": ["before 4am on monday"]
+    },
+    {
+      "description": "Separate major updates",
+      "matchUpdateTypes": ["major"],
+      "labels": ["dependencies", "breaking"]
+    }
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 4am on monday"]
+  },
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"]
+  },
+  "schedule": ["before 4am on monday"],
+  "timezone": "Asia/Tokyo"
+}
