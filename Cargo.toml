@@ -53,6 +53,21 @@ tap = "shonenm/homebrew-quay"
 publish-jobs = ["homebrew"]
 checksum = "sha256"
 
+# cargo-deb configuration
+[package.metadata.deb]
+maintainer = "matsushimakouta"
+copyright = "2025 matsushimakouta"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+Quay is a TUI port manager that provides a unified view of \
+local processes, SSH port forwards, and Docker containers."""
+section = "utils"
+priority = "optional"
+assets = [
+    ["target/release/quay", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/quay/", "644"],
+]
+
 [profile.release]
 opt-level = 3
 lto = true

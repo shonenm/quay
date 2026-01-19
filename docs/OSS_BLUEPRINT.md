@@ -265,22 +265,22 @@ body:
 ## 7. 実装フェーズ
 
 ### Phase 1: 基盤整備
-- [ ] cargo-dist 設定
-- [ ] release-plz 設定
-- [ ] GitHub Actions ワークフロー
+- [x] cargo-dist 設定
+- [x] release-plz 設定
+- [x] GitHub Actions ワークフロー
 
 ### Phase 2: 配布チャネル
-- [ ] Homebrew Tap リポジトリ作成
-- [ ] APT リポジトリ (GitHub Pages)
-- [ ] シェルインストーラー
+- [x] Homebrew Tap リポジトリ作成
+- [x] APT リポジトリ (GitHub Pages)
+- [x] シェルインストーラー
 
 ### Phase 3: 自動化
-- [ ] Renovate 導入
-- [ ] cargo-audit CI
-- [ ] 日次セキュリティスキャン
+- [x] Renovate 導入
+- [x] cargo-audit CI
+- [x] 日次セキュリティスキャン
 
 ### Phase 4: コミュニティ
-- [ ] CONTRIBUTING.md
+- [x] CONTRIBUTING.md
 - [ ] CODE_OF_CONDUCT.md
 - [ ] Issue Forms
 

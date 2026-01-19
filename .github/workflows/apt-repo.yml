@@ -1,0 +1,180 @@
+# APT Repository workflow
+# Builds .deb packages and deploys to GitHub Pages as an APT repository
+
+name: APT Repository
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g., 0.1.0)'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-deb:
+    name: Build .deb packages
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: amd64
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Build .deb package
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          fi
+          cargo deb --target ${{ matrix.target }}
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/debian/*.deb
+
+  deploy-apt:
+    name: Deploy APT Repository
+    needs: build-deb
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all .deb artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: debs
+          pattern: deb-*
+          merge-multiple: true
+
+      - name: Setup APT repository structure
+        run: |
+          mkdir -p apt-repo/pool/main
+          mkdir -p apt-repo/dists/stable/main/binary-amd64
+          mkdir -p apt-repo/dists/stable/main/binary-arm64
+
+          # Move .deb files to pool
+          mv debs/*.deb apt-repo/pool/main/
+
+      - name: Import GPG key
+        if: env.GPG_PRIVATE_KEY != ''
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+
+      - name: Generate Packages index
+        run: |
+          cd apt-repo
+
+          # Generate Packages for amd64
+          dpkg-scanpackages --arch amd64 pool/ > dists/stable/main/binary-amd64/Packages
+          gzip -k -f dists/stable/main/binary-amd64/Packages
+
+          # Generate Packages for arm64
+          dpkg-scanpackages --arch arm64 pool/ > dists/stable/main/binary-arm64/Packages
+          gzip -k -f dists/stable/main/binary-arm64/Packages
+
+      - name: Generate Release file
+        run: |
+          cd apt-repo/dists/stable
+
+          cat > Release << EOF
+          Origin: Quay
+          Label: Quay
+          Suite: stable
+          Codename: stable
+          Version: 1.0
+          Architectures: amd64 arm64
+          Components: main
+          Description: Quay APT Repository
+          EOF
+
+          # Add checksums
+          echo "MD5Sum:" >> Release
+          for f in main/binary-*/Packages*; do
+            [ -f "$f" ] && echo " $(md5sum $f | cut -d' ' -f1) $(wc -c < $f) $f" >> Release
+          done
+
+          echo "SHA256:" >> Release
+          for f in main/binary-*/Packages*; do
+            [ -f "$f" ] && echo " $(sha256sum $f | cut -d' ' -f1) $(wc -c < $f) $f" >> Release
+          done
+
+      - name: Sign Release file
+        if: env.GPG_PRIVATE_KEY != ''
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          cd apt-repo/dists/stable
+          gpg --batch --yes --armor --detach-sign -o Release.gpg Release
+          gpg --batch --yes --armor --clearsign -o InRelease Release
+
+      - name: Add public key
+        run: |
+          # Export public key if available, otherwise create placeholder
+          if gpg --list-keys 2>/dev/null | grep -q .; then
+            gpg --armor --export > apt-repo/quay-archive-keyring.gpg
+          else
+            echo "# GPG public key will be added when APT_GPG_PRIVATE_KEY secret is configured" > apt-repo/quay-archive-keyring.gpg
+          fi
+
+      - name: Add installation instructions
+        run: |
+          cat > apt-repo/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head><title>Quay APT Repository</title></head>
+          <body>
+          <h1>Quay APT Repository</h1>
+          <h2>Installation</h2>
+          <pre>
+          # Download and install the GPG key
+          curl -fsSL https://shonenm.github.io/quay/quay-archive-keyring.gpg | sudo gpg --dearmor -o /usr/share/keyrings/quay-archive-keyring.gpg
+
+          # Add the repository
+          echo "deb [signed-by=/usr/share/keyrings/quay-archive-keyring.gpg] https://shonenm.github.io/quay/ stable main" | sudo tee /etc/apt/sources.list.d/quay.list
+
+          # Update and install
+          sudo apt update
+          sudo apt install quay
+          </pre>
+          </body>
+          </html>
+          EOF
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./apt-repo
+          publish_branch: gh-pages
+          force_orphan: true
