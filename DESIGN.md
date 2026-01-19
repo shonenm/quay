@@ -167,32 +167,32 @@ quay kill --pid 1234  # PIDで
 ## 実装ステップ
 
 ### Phase 1: 基盤
-1. [ ] プロジェクト構造作成
-2. [ ] CLI引数パース (clap)
-3. [ ] 基本的なTUIフレームワーク (ratatui)
-4. [ ] イベントループ
+1. [x] プロジェクト構造作成
+2. [x] CLI引数パース (clap)
+3. [x] 基本的なTUIフレームワーク (ratatui)
+4. [x] イベントループ
 
 ### Phase 2: データ取得
-5. [ ] Local ports (lsof パース)
-6. [ ] Docker ports (docker ps パース)
-7. [ ] SSH forwards (ps パース + 状態管理)
+5. [x] Local ports (lsof パース)
+6. [x] Docker ports (docker ps パース)
+7. [x] SSH forwards (ps パース + 状態管理)
 
 ### Phase 3: UI
-8. [ ] テーブル表示
-9. [ ] フィルタ/検索
-10. [ ] 詳細ポップアップ
-11. [ ] ヘルプ画面
+8. [x] テーブル表示
+9. [x] フィルタ/検索
+10. [x] 詳細ポップアップ
+11. [x] ヘルプ画面
 
 ### Phase 4: アクション
-12. [ ] Kill process
-13. [ ] Create SSH forward
-14. [ ] Remove SSH forward
+12. [x] Kill process
+13. [x] Create SSH forward
+14. [x] Remove SSH forward
 
 ### Phase 5: 仕上げ
-15. [ ] エラーハンドリング
-16. [ ] 自動更新
-17. [ ] README
-18. [ ] Homebrew formula (optional)
+15. [x] エラーハンドリング
+16. [x] 自動更新
+17. [x] README
+18. [x] Homebrew formula (cargo-dist)
 
 ### Phase 6: 拡張機能
 19. [x] 設定ファイル基盤 (config.rs)
