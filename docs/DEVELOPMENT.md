@@ -26,21 +26,31 @@ cargo test
 
 ```
 quay/
-├── Cargo.toml        # Dependencies
-├── Cargo.lock        # Lock file
-├── README.md         # Public documentation
-├── DESIGN.md         # Design specification
+├── Cargo.toml            # Dependencies
+├── Cargo.lock            # Lock file
+├── README.md             # Public documentation
+├── DESIGN.md             # Design specification
+├── CONTRIBUTING.md       # Contribution guidelines
+├── CODE_OF_CONDUCT.md    # Code of conduct
+├── SECURITY.md           # Vulnerability reporting
+├── LICENSE               # MIT license
+├── .github/
+│   ├── workflows/        # CI workflows (release, security, apt-repo)
+│   └── ISSUE_TEMPLATE/   # Bug report / feature request templates
 ├── docs/
 │   ├── ARCHITECTURE.md
-│   └── DEVELOPMENT.md
+│   ├── DEVELOPMENT.md
+│   ├── OSS_BLUEPRINT.md  # Open-source roadmap
+│   ├── HOMEBREW_SETUP.md # Homebrew tap setup guide
+│   └── APT_SETUP.md      # APT repository setup guide
 └── src/
-    ├── main.rs       # Entry point
-    ├── app.rs        # State management
-    ├── config.rs     # Configuration handling
-    ├── event.rs      # Event handling
-    ├── preset.rs     # SSH presets
-    ├── ui.rs         # UI rendering
-    └── port/         # Port collection modules
+    ├── main.rs           # Entry point
+    ├── app.rs            # State management
+    ├── config.rs         # Configuration handling
+    ├── event.rs          # Event handling
+    ├── preset.rs         # SSH presets
+    ├── ui.rs             # UI rendering
+    └── port/             # Port collection modules
 ```
 
 ## Commands
@@ -84,10 +94,16 @@ cargo install --path .
 Tests are located alongside the code:
 
 ```
-src/port/local.rs   → test_parse_lsof_fields, test_extract_port
-src/port/docker.rs  → test_parse_docker_ps, test_parse_docker_ps_multiple_ports
-src/port/ssh.rs     → test_parse_ssh_local_forward, test_parse_ssh_remote_forward
-src/main.rs         → test_cli_parse_*
+src/port/local.rs   → test_parse_lsof_fields, test_parse_lsof_ipv6, test_extract_port
+src/port/docker.rs  → test_parse_docker_ps, test_parse_docker_ps_multiple_ports,
+                      test_parse_docker_ps_ipv6, test_parse_docker_ps_empty
+src/port/ssh.rs     → test_parse_ssh_local_forward, test_parse_ssh_remote_forward,
+                      test_parse_ssh_multiple_forwards, test_parse_ssh_no_forwards
+src/config.rs       → test_default_config, test_parse_config, test_parse_partial_config
+src/preset.rs       → test_default_presets, test_parse_presets
+src/app.rs          → test_refresh_ticks_default, test_should_refresh_uses_refresh_ticks
+src/main.rs         → test_cli_parse_default, test_cli_parse_list,
+                      test_cli_parse_forward, test_cli_parse_kill
 ```
 
 Run all tests:
@@ -121,6 +137,22 @@ cargo test
    # Create forward via TUI
    # Press 'f' to open forward dialog
    ```
+
+4. **Presets**
+   - Create `~/.config/quay/presets.toml` with a `[[preset]]` entry
+   - Press `p` in TUI to open preset list
+   - Verify `j`/`k` navigates presets, `Enter` launches forward
+
+5. **Mouse**
+   - Set `mouse_enabled = true` in `~/.config/quay/config.toml`
+   - Verify clicking a row selects it
+   - Verify scroll wheel moves selection
+   - Set `mouse_enabled = false` and verify mouse is disabled
+
+6. **Configuration**
+   - Change `refresh_interval` in `config.toml` and verify auto-refresh timing changes
+   - Change `default_filter` and verify the TUI starts with the specified filter
+   - Remove `config.toml` and verify defaults are applied
 
 ## Configuration
 
@@ -170,8 +202,9 @@ EOF
    pub mod newtype;
 
    // In collect_all():
-   if let Ok(entries) = newtype::collect().await {
-       entries.extend(entries);
+   match newtype::collect().await {
+       Ok(new_entries) => entries.extend(new_entries),
+       Err(_) => {}
    }
    ```
 4. Add `PortSource::NewType` variant

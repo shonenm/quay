@@ -20,6 +20,9 @@
 | SSH転送作成 | インタラクティブにポートフォワード作成 |
 | プロセス停止 | 選択したポートのプロセスを kill |
 | 自動更新 | 定期的にポート情報を再取得 |
+| プリセット | SSH転送テンプレートをワンキーで起動 |
+| マウスサポート | クリック・スクロール操作（設定で有効化） |
+| 設定ファイル | auto_refresh, refresh_interval, default_filter, mouse_enabled |
 
 ## データモデル
 
@@ -49,13 +52,14 @@ pub struct PortEntry {
 ### Local Ports (macOS)
 
 ```bash
-lsof -i -P -n | grep LISTEN
+lsof -i -P -n -sTCP:LISTEN -Fcpn
 ```
 
-出力例:
+出力例（フィールドベース形式）:
 ```
-node      1234  user   23u  IPv4 0x...  TCP *:3000 (LISTEN)
-python    5678  user   5u   IPv6 0x...  TCP *:8080 (LISTEN)
+p12345      # PID
+cnode       # Command name
+n*:3000     # Network address
 ```
 
 ### SSH Port Forwards
@@ -98,7 +102,7 @@ def456  redis     0.0.0.0:6379->6379/tcp
 │ DOCKER │ :6379  │ redis:6379      │ redis (def456)              │
 │        │        │                 │                             │
 ├─────────────────────────────────────────────────────────────────┤
-│ [Enter] Details  [k] Kill  [f] Forward  [r] Refresh             │
+│ [j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [p] Presets  [?] Help  [q] Quit│
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -119,6 +123,8 @@ def456  redis     0.0.0.0:6379->6379/tcp
 | `2` | SSH のみ表示 |
 | `3` | Docker のみ表示 |
 | `0` | 全て表示 |
+| `a` | 自動更新の切り替え |
+| `p` | プリセット表示 |
 | `q` / `Esc` | 終了 |
 | `?` | ヘルプ表示 |
 
@@ -129,17 +135,21 @@ quay/
 ├── Cargo.toml
 ├── DESIGN.md
 ├── README.md
+├── docs/
+│   ├── ARCHITECTURE.md   # アーキテクチャ詳細
+│   └── DEVELOPMENT.md    # 開発ガイド
 └── src/
     ├── main.rs           # エントリーポイント、CLI引数
     ├── app.rs            # アプリケーション状態
+    ├── config.rs         # 設定ファイル処理
+    ├── preset.rs         # SSHフォワードプリセット
     ├── ui.rs             # UI描画
-    ├── event.rs          # キーボードイベント処理
-    ├── port/
-    │   ├── mod.rs        # PortEntry, PortSource
-    │   ├── local.rs      # lsof パース
-    │   ├── ssh.rs        # SSH転送管理
-    │   └── docker.rs     # docker ps パース
-    └── action.rs         # kill, forward などのアクション
+    ├── event.rs          # キーボード・マウスイベント処理
+    └── port/
+        ├── mod.rs        # PortEntry, PortSource, collect_all()
+        ├── local.rs      # lsof パース
+        ├── ssh.rs        # SSH転送管理
+        └── docker.rs     # docker ps パース
 ```
 
 ## CLI インターフェース

@@ -70,6 +70,7 @@ pub struct App {
     pub forward_input: ForwardInput,      // SSH forward creation form
     pub auto_refresh: bool,               // Auto-refresh enabled
     pub tick_count: u32,                  // Tick counter for refresh
+    pub refresh_ticks: u32,              // Ticks between auto-refreshes (from config)
     pub status_message: Option<(String, u32)>, // Status with TTL
     pub presets: Vec<Preset>,             // SSH forward presets
     pub preset_selected: usize,           // Selected preset index

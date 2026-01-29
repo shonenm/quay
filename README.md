@@ -88,7 +88,7 @@ quay forward 8080:localhost:80 remote-host -R
 │ SSH    │ :9000  │ localhost:80    │ ssh (pid:2345)          │
 │ DOCKER │ :5432  │ postgres:5432   │ postgres (abc123)       │
 ├─────────────────────────────────────────────────────────────┤
-│ [j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [q] Quit│
+│ [j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [p] Presets  [?] Help  [q] Quit│
 └─────────────────────────────────────────────────────────────┘
 ```
 
