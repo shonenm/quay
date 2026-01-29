@@ -281,8 +281,8 @@ body:
 
 ### Phase 4: コミュニティ
 - [x] CONTRIBUTING.md
-- [ ] CODE_OF_CONDUCT.md
-- [ ] Issue Forms
+- [x] CODE_OF_CONDUCT.md
+- [x] Issue Forms
 
 ---
 
