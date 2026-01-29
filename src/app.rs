@@ -99,6 +99,7 @@ pub struct App {
     pub forward_input: ForwardInput,
     pub auto_refresh: bool,
     pub tick_count: u32,
+    pub refresh_ticks: u32,
     pub status_message: Option<(String, u32)>, // (message, ticks_remaining)
     pub presets: Vec<Preset>,
     pub preset_selected: usize,
@@ -118,6 +119,7 @@ impl App {
             forward_input: ForwardInput::new(),
             auto_refresh: false,
             tick_count: 0,
+            refresh_ticks: 20,
             status_message: None,
             presets: Vec::new(),
             preset_selected: 0,
@@ -161,8 +163,7 @@ impl App {
     }
 
     pub fn should_refresh(&self) -> bool {
-        // Refresh every 20 ticks (~5 seconds at 250ms tick rate)
-        self.auto_refresh && self.tick_count.is_multiple_of(20)
+        self.auto_refresh && self.tick_count > 0 && self.tick_count.is_multiple_of(self.refresh_ticks)
     }
 
     pub fn reset_forward_input(&mut self) {
@@ -246,5 +247,44 @@ impl App {
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_refresh_ticks_default() {
+        let app = App::new();
+        assert_eq!(app.refresh_ticks, 20);
+    }
+
+    #[test]
+    fn test_should_refresh_uses_refresh_ticks() {
+        let mut app = App::new();
+        app.auto_refresh = true;
+        app.refresh_ticks = 10;
+
+        // tick_count 0 should not refresh (guard)
+        app.tick_count = 0;
+        assert!(!app.should_refresh());
+
+        // tick_count 5 should not refresh
+        app.tick_count = 5;
+        assert!(!app.should_refresh());
+
+        // tick_count 10 should refresh
+        app.tick_count = 10;
+        assert!(app.should_refresh());
+
+        // tick_count 20 should refresh
+        app.tick_count = 20;
+        assert!(app.should_refresh());
+
+        // auto_refresh off should not refresh
+        app.auto_refresh = false;
+        app.tick_count = 10;
+        assert!(!app.should_refresh());
     }
 }
