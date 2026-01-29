@@ -126,7 +126,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         let help_text = match app.input_mode {
             InputMode::Search => "[Enter/Esc] Done  [Backspace] Delete",
-            InputMode::Normal => "[j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [?] Help  [q] Quit",
+            InputMode::Normal => "[j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [p] Presets  [?] Help  [q] Quit",
         };
         Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)))
     };
@@ -224,6 +224,7 @@ fn draw_help_popup(frame: &mut Frame) {
         Line::from("  Enter   Show details"),
         Line::from("  K       Kill process"),
         Line::from("  f       New SSH forward"),
+        Line::from("  p       Show presets"),
         Line::from("  r       Refresh"),
         Line::from("  a       Toggle auto-refresh"),
         Line::from("  q/Esc   Quit"),
