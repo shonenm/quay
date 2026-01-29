@@ -164,19 +164,27 @@ async fn run_kill(port: u16, pid: Option<u32>) -> Result<()> {
 }
 
 async fn run_tui() -> Result<()> {
+    // Load config first (needed for terminal setup)
+    let config = config::Config::load();
+    let mouse_enabled = config.ui.mouse_enabled;
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    if mouse_enabled {
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    } else {
+        execute!(stdout, EnterAlternateScreen)?;
+    }
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     // Create app state
     let mut app = App::new();
 
-    // Load config and apply settings
-    let config = config::Config::load();
+    // Apply config settings
     app.auto_refresh = config.general.auto_refresh;
+    app.refresh_ticks = config.general.refresh_interval.saturating_mul(4).max(1);
     match config.general.default_filter.as_str() {
         "local" => app.filter = Filter::Local,
         "ssh" => app.filter = Filter::Ssh,
@@ -189,8 +197,9 @@ async fn run_tui() -> Result<()> {
     app.presets = presets.preset;
 
     // Load initial data
-    if let Ok(entries) = port::collect_all().await {
-        app.set_entries(entries);
+    match port::collect_all().await {
+        Ok(entries) => app.set_entries(entries),
+        Err(e) => app.set_status(&format!("Load failed: {}", e)),
     }
 
     // Event handler
@@ -304,9 +313,12 @@ async fn run_tui() -> Result<()> {
                         Action::FilterSsh => app.set_filter(Filter::Ssh),
                         Action::FilterDocker => app.set_filter(Filter::Docker),
                         Action::Refresh => {
-                            if let Ok(entries) = port::collect_all().await {
-                                app.set_entries(entries);
-                                app.set_status("Refreshed");
+                            match port::collect_all().await {
+                                Ok(entries) => {
+                                    app.set_entries(entries);
+                                    app.set_status("Refreshed");
+                                }
+                                Err(e) => app.set_status(&format!("Refresh failed: {}", e)),
                             }
                         }
                         Action::ToggleAutoRefresh => {
@@ -356,8 +368,8 @@ async fn run_tui() -> Result<()> {
                 }
             }
             AppEvent::Mouse(mouse) => {
-                // Only handle mouse in normal mode without popup
-                if app.popup == Popup::None && app.input_mode == InputMode::Normal {
+                // Only handle mouse if enabled and in normal mode without popup
+                if mouse_enabled && app.popup == Popup::None && app.input_mode == InputMode::Normal {
                     // Calculate table area: header(3) + filter(3) = 6 rows before table
                     let table_top = 6_u16;
                     let term_height = terminal.size()?.height;
@@ -380,8 +392,9 @@ async fn run_tui() -> Result<()> {
             AppEvent::Tick => {
                 app.tick();
                 if app.should_refresh() {
-                    if let Ok(entries) = port::collect_all().await {
-                        app.set_entries(entries);
+                    match port::collect_all().await {
+                        Ok(entries) => app.set_entries(entries),
+                        Err(e) => app.set_status(&format!("Auto-refresh failed: {}", e)),
                     }
                 }
             }
@@ -394,7 +407,11 @@ async fn run_tui() -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+    if mouse_enabled {
+        execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)?;
+    } else {
+        execute!(io::stdout(), LeaveAlternateScreen)?;
+    }
 
     Ok(())
 }
