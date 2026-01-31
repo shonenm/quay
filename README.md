@@ -1,19 +1,25 @@
 # Quay
 
+[![Crates.io](https://img.shields.io/crates/v/quay-tui.svg)](https://crates.io/crates/quay-tui)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A TUI port manager for local processes, SSH forwards, and Docker containers.
 
 ## Features
 
 - **Unified View**: See all ports in one place (local, SSH, Docker)
 - **Interactive TUI**: Navigate with keyboard, filter by source, search by name/port
-- **Quick Actions**: Kill processes directly from the interface
-- **CLI Support**: Non-interactive commands for scripting
+- **Quick Actions**: Kill processes or create SSH forwards directly from the interface
+- **SSH Presets**: Save frequently used port forwards as presets for one-key launch
+- **Mouse Support**: Click and scroll navigation (configurable)
+- **Configuration**: Customize auto-refresh interval, default filter, and more via `~/.config/quay/config.toml`
+- **CLI Support**: Non-interactive commands for scripting (`quay list --json`)
 - **Fast**: Written in Rust with ratatui
 
 ## Installation
 
 ```bash
-cargo install --path .
+cargo install quay-tui
 ```
 
 ## Usage
@@ -129,8 +135,7 @@ ssh_host = "staging-bastion"
 
 ## Requirements
 
-- Rust 1.88+
-- macOS (uses `lsof` for port detection)
+- macOS or Linux (`lsof` for port detection)
 - Docker (optional, for container port detection)
 
 ## Development
