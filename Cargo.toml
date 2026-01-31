@@ -1,5 +1,5 @@
 [package]
-name = "quay"
+name = "quay-tui"
 version = "0.1.0"
 edition = "2021"
 description = "A TUI port manager for local processes, SSH forwards, and Docker containers"
@@ -10,6 +10,10 @@ homepage = "https://github.com/shonenm/quay"
 readme = "README.md"
 keywords = ["tui", "port-manager", "docker", "ssh", "ratatui"]
 categories = ["command-line-utilities", "network-programming"]
+
+[[bin]]
+name = "quay"
+path = "src/main.rs"
 
 [dependencies]
 # TUI
