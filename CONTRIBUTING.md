@@ -26,10 +26,12 @@ cargo run
 
 ## Code Style
 
-- Run `cargo fmt` before committing
-- Run `cargo clippy` to check for common issues
+- Run `cargo fmt` before committing (`rustfmt.toml` enforces `style_edition = "2024"`)
+- Run `cargo clippy --all-targets -- -D warnings` to check for issues (pedantic lints enabled)
+- `unsafe` code is forbidden
 - Follow Rust naming conventions
 - Add tests for new functionality
+- CI will verify all of the above on every PR
 
 ## Commit Messages
 

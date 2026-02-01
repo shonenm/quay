@@ -1,5 +1,6 @@
 # Quay
 
+[![CI](https://github.com/shonenm/quay/actions/workflows/ci.yml/badge.svg)](https://github.com/shonenm/quay/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/quay-tui.svg)](https://crates.io/crates/quay-tui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -181,6 +182,7 @@ ssh_host = "staging-bastion"
 
 ## Requirements
 
+- Rust 1.85+ (for building from source)
 - macOS or Linux (`lsof` for port detection)
 - Docker (optional, for container port detection)
 
@@ -219,6 +221,9 @@ cargo build --release
 
 # Run tests
 cargo test
+
+# Lint (pedantic)
+cargo clippy --all-targets -- -D warnings
 ```
 
 See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for more details.

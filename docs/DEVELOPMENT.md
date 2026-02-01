@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust 1.88+ (for latest dependencies)
+- Rust 1.85+ (MSRV declared in `Cargo.toml`)
 - Docker (optional, for container port detection)
 
 ## Setup
@@ -35,7 +35,7 @@ quay/
 ├── SECURITY.md           # Vulnerability reporting
 ├── LICENSE               # MIT license
 ├── .github/
-│   ├── workflows/        # CI workflows (release, security, apt-repo)
+│   ├── workflows/        # CI workflows (ci, release, security, apt-repo)
 │   └── ISSUE_TEMPLATE/   # Bug report / feature request templates
 ├── docs/
 │   ├── ARCHITECTURE.md
@@ -72,11 +72,11 @@ cargo test test_parse_lsof
 # Check without building
 cargo check
 
-# Format code
+# Format code (uses rustfmt.toml: style_edition = "2024")
 cargo fmt
 
-# Lint
-cargo clippy
+# Lint (pedantic enabled via [lints.clippy] in Cargo.toml)
+cargo clippy --all-targets -- -D warnings
 ```
 
 ### Build
@@ -313,10 +313,13 @@ EOF
 
 ## Code Style
 
-- Use `cargo fmt` before committing
+- Run `cargo fmt` before committing (`rustfmt.toml` enforces `style_edition = "2024"`)
+- Run `cargo clippy --all-targets -- -D warnings` (pedantic lints enabled in `Cargo.toml`)
+- `unsafe` code is forbidden via `[lints.rust]`
 - Follow Rust naming conventions
 - Keep functions small and focused
 - Add tests for parsing logic
+- CI runs fmt, clippy, test, and `cargo deny` on every push/PR
 
 ## Commit Convention
 
@@ -334,7 +337,12 @@ Types:
 ## Release Checklist
 
 1. Update version in `Cargo.toml`
-2. Run full test suite: `cargo test`
+2. Run CI checks locally:
+   ```bash
+   cargo fmt --check
+   cargo clippy --all-targets -- -D warnings
+   cargo test
+   ```
 3. Build release: `cargo build --release`
 4. Test binary: `./target/release/quay`
 5. Tag release: `git tag v0.x.x`
