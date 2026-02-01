@@ -159,7 +159,10 @@ ssh host "docker ps --format '{{.ID}}\t{{.Names}}\t{{.Ports}}'"
 Output format:
 ```
 abc123def456  postgres  0.0.0.0:5432->5432/tcp
+def789abc012  app       0.0.0.0:3000-3001->3000-3001/tcp, :::3000-3001->3000-3001/tcp
 ```
+
+Port range mappings (e.g., `3000-3001->3000-3001/tcp`) are expanded into individual entries. IPv4/IPv6 duplicates are deduplicated per container.
 
 ### SSH Forwards
 

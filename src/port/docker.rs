@@ -36,8 +36,10 @@ pub async fn collect(remote_host: Option<&str>) -> Result<Vec<PortEntry>> {
 
 fn parse_docker_ps(output: &str, remote_mode: bool) -> Result<Vec<PortEntry>> {
     let mut entries = Vec::new();
-    // Match: 0.0.0.0:5432->5432/tcp or :::5432->5432/tcp (IPv6)
-    let port_re = Regex::new(r"(?:[\d.:]+:)?(\d+)->(\d+)/tcp")?;
+    // Match single port: 0.0.0.0:5432->5432/tcp or :::5432->5432/tcp
+    // Match port range:  0.0.0.0:3000-3001->3000-3001/tcp or :::3000-3001->3000-3001/tcp
+    let port_re =
+        Regex::new(r"(?:[\d.:]+:)?(\d+)(?:-(\d+))?->(\d+)(?:-(\d+))?/tcp")?;
 
     for line in output.lines() {
         if line.trim().is_empty() {
@@ -52,24 +54,54 @@ fn parse_docker_ps(output: &str, remote_mode: bool) -> Result<Vec<PortEntry>> {
         let container_id = parts[0].to_string();
         let container_name = parts[1].to_string();
         let ports_str = parts[2];
+        let mut seen_ports = std::collections::HashSet::new();
 
         for cap in port_re.captures_iter(ports_str) {
-            let local_port = cap[1].parse::<u16>().unwrap_or(0);
-            let remote_port = cap[2].parse::<u16>().ok();
+            let local_start = cap[1].parse::<u16>().unwrap_or(0);
+            let local_end = cap.get(2).and_then(|m| m.as_str().parse::<u16>().ok());
+            let remote_start = cap[3].parse::<u16>().unwrap_or(0);
+            let remote_end = cap.get(4).and_then(|m| m.as_str().parse::<u16>().ok());
 
-            if local_port > 0 {
-                entries.push(PortEntry {
-                    source: PortSource::Docker,
-                    local_port,
-                    remote_host: Some(container_name.clone()),
-                    remote_port,
-                    process_name: container_name.clone(),
-                    pid: None,
-                    container_id: Some(container_id.clone()),
-                    container_name: Some(container_name.clone()),
-                    ssh_host: None,
-                    is_open: remote_mode,
-                });
+            match (local_end, remote_end) {
+                // Range: 3000-3001->3000-3001/tcp → expand to individual ports
+                (Some(le), Some(re)) if le >= local_start && re >= remote_start => {
+                    let count = (le - local_start + 1).min(re - remote_start + 1);
+                    for i in 0..count {
+                        let lp = local_start + i;
+                        let rp = remote_start + i;
+                        if lp > 0 && seen_ports.insert(lp) {
+                            entries.push(PortEntry {
+                                source: PortSource::Docker,
+                                local_port: lp,
+                                remote_host: Some(container_name.clone()),
+                                remote_port: Some(rp),
+                                process_name: container_name.clone(),
+                                pid: None,
+                                container_id: Some(container_id.clone()),
+                                container_name: Some(container_name.clone()),
+                                ssh_host: None,
+                                is_open: remote_mode,
+                            });
+                        }
+                    }
+                }
+                // Single port: 5432->5432/tcp
+                _ => {
+                    if local_start > 0 && seen_ports.insert(local_start) {
+                        entries.push(PortEntry {
+                            source: PortSource::Docker,
+                            local_port: local_start,
+                            remote_host: Some(container_name.clone()),
+                            remote_port: Some(remote_start),
+                            process_name: container_name.clone(),
+                            pid: None,
+                            container_id: Some(container_id.clone()),
+                            container_name: Some(container_name.clone()),
+                            ssh_host: None,
+                            is_open: remote_mode,
+                        });
+                    }
+                }
             }
         }
     }
@@ -108,6 +140,37 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].local_port, 8080);
         assert_eq!(entries[0].remote_port, Some(80));
+    }
+
+    #[test]
+    fn test_parse_docker_ps_port_range() {
+        let output =
+            "abc123\tsyntopic-dev\t0.0.0.0:3000-3001->3000-3001/tcp, :::3000-3001->3000-3001/tcp";
+        let entries = parse_docker_ps(output, false).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].local_port, 3000);
+        assert_eq!(entries[0].remote_port, Some(3000));
+        assert_eq!(entries[1].local_port, 3001);
+        assert_eq!(entries[1].remote_port, Some(3001));
+    }
+
+    #[test]
+    fn test_parse_docker_ps_mixed_range_and_single() {
+        let output = "abc123\tapp\t0.0.0.0:5173-5174->5173-5174/tcp, 0.0.0.0:5432->5432/tcp";
+        let entries = parse_docker_ps(output, false).unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].local_port, 5173);
+        assert_eq!(entries[1].local_port, 5174);
+        assert_eq!(entries[2].local_port, 5432);
+    }
+
+    #[test]
+    fn test_parse_docker_ps_ipv4_ipv6_dedup() {
+        let output =
+            "abc123\tpostgres\t0.0.0.0:5432->5432/tcp, :::5432->5432/tcp";
+        let entries = parse_docker_ps(output, false).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].local_port, 5432);
     }
 
     #[test]

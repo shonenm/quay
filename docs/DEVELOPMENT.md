@@ -102,7 +102,9 @@ Tests are located alongside the code:
 src/port/local.rs   → test_parse_lsof_fields, test_parse_lsof_ipv6, test_extract_port,
                       test_parse_lsof_remote_mode
 src/port/docker.rs  → test_parse_docker_ps, test_parse_docker_ps_multiple_ports,
-                      test_parse_docker_ps_ipv6, test_parse_docker_ps_empty
+                      test_parse_docker_ps_ipv6, test_parse_docker_ps_port_range,
+                      test_parse_docker_ps_mixed_range_and_single,
+                      test_parse_docker_ps_ipv4_ipv6_dedup, test_parse_docker_ps_empty
 src/port/ssh.rs     → test_parse_ssh_local_forward, test_parse_ssh_remote_forward,
                       test_parse_ssh_multiple_forwards, test_parse_ssh_no_forwards
 src/config.rs       → test_default_config, test_parse_config, test_parse_partial_config,
