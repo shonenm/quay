@@ -1,6 +1,6 @@
 [package]
 name = "quay-tui"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A TUI port manager for local processes, SSH forwards, and Docker containers"
 authors = ["matsushimakouta"]
