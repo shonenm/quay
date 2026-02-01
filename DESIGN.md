@@ -19,12 +19,13 @@
 | リモートモード | `--remote host` でSSH経由のリモートポートスキャン＋フォワード |
 | フィルタ/検索 | ポート番号、プロセス名で絞り込み |
 | SSH転送作成 | インタラクティブにポートフォワード作成 |
-| Quick Forward | `F` キーで選択ポートを同一番号でそのままフォワード（リモートモード） |
+| Quick Forward | `F` キーで選択ポートを同一番号でそのままフォワード（リモート/Dockerターゲットモード） |
+| Docker ターゲット | `--docker container` でコンテナ内 LISTEN ポートを発見・フォワード |
 | プロセス停止 | 選択したポートのプロセスを kill |
 | 自動更新 | 定期的にポート情報を再取得 |
 | プリセット | SSH転送テンプレートをワンキーで起動 |
 | マウスサポート | クリック・スクロール操作（設定で有効化） |
-| 設定ファイル | auto_refresh, refresh_interval, default_filter, remote_host, mouse_enabled |
+| 設定ファイル | auto_refresh, refresh_interval, default_filter, remote_host, docker_target, mouse_enabled |
 
 ## データモデル
 
@@ -48,6 +49,7 @@ pub struct PortEntry {
     pub container_name: Option<String>, // Docker の場合
     pub ssh_host: Option<String>,       // SSH転送のホスト
     pub is_open: bool,                  // TCP probe 結果 (リモートモード時はlsof結果を信頼)
+    pub is_loopback: bool,             // 127.0.0.1 バインド (Docker ターゲット時)
 }
 ```
 
@@ -97,6 +99,35 @@ abc123  postgres  0.0.0.0:5432->5432/tcp
 def456  redis     0.0.0.0:6379->6379/tcp
 ```
 
+### Docker ターゲット (コンテナ内ポート)
+
+```bash
+# リモートモード
+ssh host "docker exec CONTAINER ss -tln"
+
+# ローカル (将来対応)
+docker exec CONTAINER ss -tln
+```
+
+出力例:
+```
+State  Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process
+LISTEN 0      511           *:3000              *:*
+LISTEN 0      511     0.0.0.0:5173        0.0.0.0:*
+LISTEN 0      128     127.0.0.1:5432      0.0.0.0:*
+LISTEN 0      511        [::]:3000           [::]:*
+```
+
+コンテナ IP 取得:
+```bash
+ssh host "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' CONTAINER"
+```
+
+フォワード:
+```bash
+ssh -f -N -L local_port:container_ip:container_port host
+```
+
 ## UI レイアウト
 
 ```
@@ -130,7 +161,7 @@ def456  redis     0.0.0.0:6379->6379/tcp
 | `Enter` | 詳細表示 |
 | `K` | 選択したポートを kill |
 | `f` | SSH転送を作成 |
-| `F` | Quick Forward（リモートモード時、同一ポート番号でフォワード） |
+| `F` | Quick Forward（リモート/Dockerターゲットモード時、同一ポート番号でフォワード） |
 | `r` | リフレッシュ |
 | `1` | Local のみ表示 |
 | `2` | SSH のみ表示 |
@@ -159,10 +190,10 @@ quay/
     ├── ui.rs             # UI描画
     ├── event.rs          # キーボード・マウスイベント処理
     ├── port/
-    │   ├── mod.rs        # PortEntry, PortSource, collect_all()
+    │   ├── mod.rs        # PortEntry, PortSource, collect_all(remote_host, docker_target)
     │   ├── local.rs      # lsof パース
     │   ├── ssh.rs        # SSH転送管理
-    │   └── docker.rs     # docker ps パース
+    │   └── docker.rs     # docker ps パース, collect_from_container(), get_container_ip()
     └── dev/
         ├── mod.rs        # DevCommands, Scenario定義, run_scenario()
         ├── listen.rs     # spawn_listeners(), TCPリスナー起動
@@ -181,6 +212,12 @@ quay --remote user@server
 quay --remote user@server list
 quay --remote user@server list --json
 quay --remote user@server kill 3000
+
+# Docker ターゲット（コンテナ内ポート発見・フォワード）
+quay --remote ailab --docker syntopic-dev
+quay --remote ailab --docker syntopic-dev list
+quay --remote ailab --docker syntopic-dev list --json
+quay -r ailab -d syntopic-dev   # 短縮形
 
 # 一覧表示（非TUI）
 quay list
@@ -265,6 +302,18 @@ quay dev check 3000 8080        # ポート開閉チェック
 25. [x] リモート対応 kill (port/mod.rs)
 26. [x] Quick Forward `F` キー (event.rs, main.rs)
 27. [x] リモートモード UI (ui.rs — ヘッダー、フッター、ヘルプ、フォーム)
+
+### Phase 8: Docker ターゲットモード
+28. [x] Docker ターゲット CLI フラグ (`--docker` / `-d`)
+29. [x] コンテナ内ポート発見 (`docker exec ... ss -tln`, docker.rs)
+30. [x] コンテナ IP 取得 (`docker inspect`, docker.rs)
+31. [x] collect_all() に docker_target 引数追加 (port/mod.rs)
+32. [x] App に docker_target, container_ip 追加 (app.rs)
+33. [x] config.toml に docker_target 対応 (config.rs)
+34. [x] Quick Forward — container_ip 経由のトンネル (main.rs)
+35. [x] Forward Form — Remote Host / SSH Host ロック (event.rs, ui.rs)
+36. [x] Kill — docker exec kill (main.rs)
+37. [x] Docker ターゲット UI 表示 (ui.rs — ヘッダー、フッター、ヘルプ、フォーム)
 
 ## 参考
 

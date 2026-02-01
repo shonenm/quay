@@ -9,6 +9,7 @@ A TUI port manager for local processes, SSH forwards, and Docker containers.
 
 - **Unified View**: See all ports in one place (local, SSH, Docker)
 - **Remote Mode**: Scan remote hosts via SSH and forward ports with one key (`quay --remote user@server`)
+- **Docker Target Mode**: Discover LISTEN ports inside a Docker container and forward them via SSH (`quay --remote host --docker container`)
 - **Interactive TUI**: Navigate with keyboard, filter by source, search by name/port
 - **Quick Actions**: Kill processes or create SSH forwards directly from the interface
 - **SSH Presets**: Save frequently used port forwards as presets for one-key launch
@@ -52,6 +53,26 @@ In remote TUI mode:
 - Press `F` on any port to **Quick Forward** (same port number, no form)
 - Press `f` to open the forward form (SSH Host is auto-filled and locked)
 
+### Docker Target Mode
+
+Discover and forward ports from inside a Docker container on a remote host:
+
+```bash
+# TUI with container port scanning
+quay --remote ailab --docker syntopic-dev
+
+# List container ports
+quay --remote ailab --docker syntopic-dev list
+quay --remote ailab --docker syntopic-dev list --json
+```
+
+In docker target TUI mode:
+- Header shows `Quay [remote: ailab] [docker: syntopic-dev]`
+- Ports are discovered via `ss -tln` inside the container (including unmapped ports)
+- Press `F` on any port to **Quick Forward** through SSH to the container IP
+- Press `f` to open the forward form (Remote Host = container IP, SSH Host = remote host, both locked)
+- The tunnel path: `localhost:port → SSH → container_ip:port`
+
 ### CLI Commands
 
 ```bash
@@ -91,7 +112,7 @@ quay forward 8080:localhost:80 remote-host -R
 | `Enter` | Show details |
 | `K` | Kill selected process |
 | `f` | Create SSH forward |
-| `F` | Quick forward (remote mode, same port) |
+| `F` | Quick forward (remote/docker mode, same port) |
 | `p` | Open presets |
 | `r` | Refresh |
 | `a` | Toggle auto-refresh |
@@ -133,6 +154,7 @@ auto_refresh = true
 refresh_interval = 5
 default_filter = "all"  # all, local, ssh, docker
 remote_host = "user@server"  # optional: default remote host
+docker_target = "my-container"  # optional: default docker container
 
 [ui]
 mouse_enabled = true

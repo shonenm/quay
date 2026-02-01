@@ -104,14 +104,17 @@ src/port/local.rs   → test_parse_lsof_fields, test_parse_lsof_ipv6, test_extra
 src/port/docker.rs  → test_parse_docker_ps, test_parse_docker_ps_multiple_ports,
                       test_parse_docker_ps_ipv6, test_parse_docker_ps_port_range,
                       test_parse_docker_ps_mixed_range_and_single,
-                      test_parse_docker_ps_ipv4_ipv6_dedup, test_parse_docker_ps_empty
+                      test_parse_docker_ps_ipv4_ipv6_dedup, test_parse_docker_ps_empty,
+                      test_parse_ss_output, test_parse_ss_output_ipv6_dedup,
+                      test_parse_ss_output_loopback, test_parse_ss_output_with_process,
+                      test_parse_ss_output_empty
 src/port/ssh.rs     → test_parse_ssh_local_forward, test_parse_ssh_remote_forward,
                       test_parse_ssh_multiple_forwards, test_parse_ssh_no_forwards
 src/config.rs       → test_default_config, test_parse_config, test_parse_partial_config,
-                      test_parse_config_with_remote_host
+                      test_parse_config_with_remote_host, test_parse_config_with_docker_target
 src/preset.rs       → test_default_presets, test_parse_presets
 src/app.rs          → test_refresh_ticks_default, test_should_refresh_uses_refresh_ticks,
-                      test_is_remote, test_forward_input_for_remote_entry
+                      test_is_remote, test_is_docker_target, test_forward_input_for_remote_entry
 src/dev/mod.rs      → test_scenario_lookup, test_scenario_web_ports,
                       test_scenario_micro_has_five, test_scenario_full_has_inactive
 src/dev/mock.rs     → test_mock_entries_not_empty, test_mock_entries_have_all_sources,
@@ -122,7 +125,9 @@ src/main.rs         → test_cli_parse_default, test_cli_parse_list,
                       test_cli_parse_remote, test_cli_parse_remote_with_list,
                       test_cli_parse_dev_listen, test_cli_parse_dev_listen_http,
                       test_cli_parse_dev_scenario, test_cli_parse_dev_scenario_list,
-                      test_cli_parse_dev_check, test_cli_parse_dev_mock
+                      test_cli_parse_dev_check, test_cli_parse_dev_mock,
+                      test_cli_parse_docker, test_cli_parse_remote_docker,
+                      test_cli_parse_docker_short_flag
 ```
 
 Run all tests:
@@ -193,7 +198,29 @@ cargo test
    ```
    Note: `--remote localhost` is useful for testing the code path but port collisions occur since remote and local are the same machine. Use different local/remote ports when testing forwards.
 
-8. **Dev Scenarios**
+8. **Docker Target Mode**
+   ```bash
+   # List container ports (requires a running container on remote host)
+   cargo run -- --remote ailab --docker syntopic-dev list
+   cargo run -- --remote ailab --docker syntopic-dev list --json
+
+   # TUI with container ports
+   cargo run -- --remote ailab --docker syntopic-dev
+   # → Header shows [remote: ailab] [docker: syntopic-dev]
+   # → Container LISTEN ports displayed (discovered via ss -tln)
+   # → Select port, press F for Quick Forward (tunnels to container IP)
+   # → Press f for forward form (Remote Host = container IP, SSH Host = ailab, both locked)
+   # → Press ? for help (shows container IP and docker target info)
+
+   # Test forwarding
+   # In TUI: select port 3000 → F
+   curl localhost:3000  # Should reach container's service
+
+   # Short flags
+   cargo run -- -r ailab -d syntopic-dev
+   ```
+
+9. **Dev Scenarios**
    ```bash
    # TUI with mock data
    cargo run -- dev mock
@@ -232,6 +259,7 @@ auto_refresh = true
 refresh_interval = 5
 default_filter = "all"
 # remote_host = "user@server"  # optional: default remote host
+# docker_target = "my-container"  # optional: default docker container
 
 [ui]
 mouse_enabled = true

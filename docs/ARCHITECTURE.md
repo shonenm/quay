@@ -37,9 +37,9 @@ src/
 ├── preset.rs         # SSH forward presets
 ├── ui.rs             # UI rendering with ratatui
 ├── port/
-│   ├── mod.rs        # PortEntry, PortSource, collect_all()
+│   ├── mod.rs        # PortEntry, PortSource, collect_all(remote_host, docker_target)
 │   ├── local.rs      # lsof parsing for local ports
-│   ├── docker.rs     # docker ps parsing
+│   ├── docker.rs     # docker ps parsing, collect_from_container(), get_container_ip()
 │   └── ssh.rs        # SSH forward detection
 └── dev/
     ├── mod.rs        # DevCommands, Scenario definitions, run_scenario()
@@ -64,6 +64,7 @@ pub struct PortEntry {
     pub container_name: Option<String>,
     pub ssh_host: Option<String>,
     pub is_open: bool,
+    pub is_loopback: bool,           // 127.0.0.1 bind (docker target)
 }
 ```
 
@@ -87,6 +88,8 @@ pub struct App {
     pub presets: Vec<Preset>,             // SSH forward presets
     pub preset_selected: usize,           // Selected preset index
     pub remote_host: Option<String>,      // Remote mode SSH host
+    pub docker_target: Option<String>,    // Docker target container name
+    pub container_ip: Option<String>,     // Docker target container IP
 }
 
 pub struct ForwardInput {
@@ -102,18 +105,25 @@ pub struct ForwardInput {
 
 ```
 1. Startup
-   main() → run_tui(remote_host) → port::collect_all(remote_host)
-                                          ↓
-                    ┌─────────────────────┼─────────────────────┐
-                    ↓                     ↓                     ↓
-         local::collect(remote)  docker::collect(remote)  ssh::collect()
-         (ssh lsof if remote)   (ssh docker if remote)   (always local)
-                    ↓                     ↓                     ↓
-                    └─────────────────────┼─────────────────────┘
-                                          ↓
-                                  Vec<PortEntry>
-                                          ↓
-                                app.set_entries()
+   main() → run_tui(remote_host, docker_target)
+                         ↓
+              port::collect_all(remote_host, docker_target)
+                         ↓
+         ┌───────────────┴───────────────────────────────┐
+         │  docker_target = None (normal mode)            │
+         │  ┌─────────────┼──────────────────┐           │
+         │  ↓             ↓                  ↓           │
+         │  local(remote) docker(remote) ssh::collect()  │
+         ├───────────────────────────────────────────────┤
+         │  docker_target = Some (docker target mode)     │
+         │  → docker::collect_from_container(target, host)│
+         │  → ss -tln inside container                   │
+         │  → skip local/docker/ssh + TCP probe          │
+         └───────────────┬───────────────────────────────┘
+                         ↓
+                 Vec<PortEntry>
+                         ↓
+               app.set_entries()
 
 2. Event Loop
    event_handler.next() → KeyEvent
@@ -164,6 +174,21 @@ def789abc012  app       0.0.0.0:3000-3001->3000-3001/tcp, :::3000-3001->3000-300
 
 Port range mappings (e.g., `3000-3001->3000-3001/tcp`) are expanded into individual entries. IPv4/IPv6 duplicates are deduplicated per container.
 
+### Docker Container Internal Ports (Docker Target Mode)
+
+```bash
+# Remote mode (via SSH)
+ssh host "docker exec CONTAINER ss -tln"
+
+# Local mode (future)
+docker exec CONTAINER ss -tln
+```
+
+Discovers ports LISTEN inside the container, including those not mapped to the host. Container IP is obtained via:
+```bash
+docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' CONTAINER
+```
+
 ### SSH Forwards
 
 Detection:
@@ -188,7 +213,7 @@ Event handler functions:
 - `handle_key()` - Normal mode key handling
 - `handle_search_key()` - Search mode input
 - `handle_popup_key()` - Popup dismissal
-- `handle_forward_key()` - Forward creation form input (remote_mode skips SSH Host field)
+- `handle_forward_key()` - Forward creation form input (remote_mode skips SSH Host, docker_mode skips Remote Host)
 - `handle_preset_key()` - Preset selection
 - `handle_mouse()` - Mouse click and scroll handling
 
@@ -281,3 +306,57 @@ This allows testing the TUI with both open and closed port entries without requi
    SSH entries → local kill (tunnel process is local)
    Local/Docker entries → ssh host "kill pid" / ssh host "docker stop id"
 ```
+
+## Docker Target Mode Flow
+
+`quay --remote ailab --docker syntopic-dev` discovers ports inside a Docker container and forwards them via SSH:
+
+```
+1. Startup
+   CLI --remote + --docker flags (or config equivalents)
+       ↓
+   docker::get_container_ip("syntopic-dev", Some("ailab"))
+       → ssh ailab "docker inspect -f '{{...IPAddress...}}' syntopic-dev"
+       → container_ip = "172.17.0.2"
+       ↓
+   port::collect_all(Some("ailab"), Some("syntopic-dev"))
+       ↓
+   docker::collect_from_container("syntopic-dev", Some("ailab"))
+       → ssh ailab "docker exec syntopic-dev ss -tln"
+       → parse_ss_output() → Vec<PortEntry>
+       → is_open: true (ss LISTEN = open)
+       → is_loopback: true/false (127.0.0.1 vs 0.0.0.0)
+       → Skips local::collect, docker::collect, ssh::collect, probe
+
+2. Quick Forward (F key)
+   selected port (3000) + container_ip (172.17.0.2) + host (ailab)
+       → ssh -f -N -L 3000:172.17.0.2:3000 ailab
+       → localhost:3000 → ailab → 172.17.0.2:3000
+
+3. Forward Form (f key)
+   Remote Host = container_ip (locked)
+   SSH Host = remote_host (locked)
+   User edits Local Port / Remote Port only
+
+4. Kill
+   docker exec kill: ssh ailab "docker exec syntopic-dev kill PID"
+   (only works if PID is available from ss output)
+```
+
+### Docker Target Port Collection
+
+```bash
+# ss -tln output from inside container
+State  Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process
+LISTEN 0      511           *:3000              *:*
+LISTEN 0      511     0.0.0.0:5173        0.0.0.0:*
+LISTEN 0      128     127.0.0.1:5432      0.0.0.0:*
+LISTEN 0      511        [::]:3000           [::]:*
+```
+
+Parse rules:
+- Skip header line (starts with "State")
+- Extract port from 4th column (last segment after `:`)
+- IPv4/IPv6 deduplication via HashSet
+- `*:port` and `0.0.0.0:port` → forwardable (`is_loopback: false`)
+- `127.0.0.1:port` → loopback-only (`is_loopback: true`)
