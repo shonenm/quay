@@ -87,9 +87,18 @@ fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
         .filtered_entries
         .iter()
         .map(|entry| {
+            let (indicator, color) = if entry.is_open {
+                ("●", Color::Green)
+            } else {
+                ("○", Color::DarkGray)
+            };
+            let local_cell = Line::from(vec![
+                Span::styled(indicator, Style::default().fg(color)),
+                Span::raw(format!(" :{}", entry.local_port)),
+            ]);
             Row::new(vec![
                 Cell::from(entry.source.to_string()),
-                Cell::from(format!(":{}", entry.local_port)),
+                Cell::from(local_cell),
                 Cell::from(entry.remote_display()),
                 Cell::from(entry.process_display()),
             ])
@@ -104,7 +113,7 @@ fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
         rows,
         [
             Constraint::Length(8),
-            Constraint::Length(8),
+            Constraint::Length(10),
             Constraint::Length(20),
             Constraint::Min(20),
         ],
@@ -164,6 +173,12 @@ fn draw_details_popup(frame: &mut Frame, app: &App) {
         None => return,
     };
 
+    let (open_text, open_color) = if entry.is_open {
+        ("Yes", Color::Green)
+    } else {
+        ("No", Color::DarkGray)
+    };
+
     let lines = vec![
         Line::from(vec![
             Span::styled("Type: ", Style::default().fg(Color::Yellow)),
@@ -172,6 +187,10 @@ fn draw_details_popup(frame: &mut Frame, app: &App) {
         Line::from(vec![
             Span::styled("Local Port: ", Style::default().fg(Color::Yellow)),
             Span::raw(format!("{}", entry.local_port)),
+        ]),
+        Line::from(vec![
+            Span::styled("Open: ", Style::default().fg(Color::Yellow)),
+            Span::styled(open_text, Style::default().fg(open_color)),
         ]),
         Line::from(vec![
             Span::styled("Remote: ", Style::default().fg(Color::Yellow)),

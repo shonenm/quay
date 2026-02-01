@@ -45,6 +45,7 @@ fn parse_lsof_fields(output: &str) -> Result<Vec<PortEntry>> {
                         pid: current_pid,
                         container_id: None,
                         container_name: None,
+                        is_open: false,
                     });
                 }
             }

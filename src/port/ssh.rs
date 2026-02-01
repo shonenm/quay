@@ -60,6 +60,7 @@ fn parse_ssh_forwards(output: &str) -> Result<Vec<PortEntry>> {
                     pid,
                     container_id: None,
                     container_name: None,
+                    is_open: false,
                 });
             }
         }
@@ -80,6 +81,7 @@ fn parse_ssh_forwards(output: &str) -> Result<Vec<PortEntry>> {
                     pid,
                     container_id: None,
                     container_name: None,
+                    is_open: false,
                 });
             }
         }

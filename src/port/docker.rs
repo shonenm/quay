@@ -53,6 +53,7 @@ fn parse_docker_ps(output: &str) -> Result<Vec<PortEntry>> {
                     pid: None,
                     container_id: Some(container_id.clone()),
                     container_name: Some(container_name.clone()),
+                    is_open: false,
                 });
             }
         }

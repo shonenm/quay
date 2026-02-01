@@ -2,9 +2,12 @@ pub mod docker;
 pub mod local;
 pub mod ssh;
 
+use std::collections::HashMap;
 use std::fmt;
+use std::time::Duration;
+use tokio::net::TcpStream;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PortSource {
     Local,
     Ssh,
@@ -31,6 +34,7 @@ pub struct PortEntry {
     pub pid: Option<u32>,
     pub container_id: Option<String>,
     pub container_name: Option<String>,
+    pub is_open: bool,
 }
 
 impl PortEntry {
@@ -60,7 +64,7 @@ impl PortEntry {
     }
 }
 
-pub async fn collect_all() -> anyhow::Result<Vec<PortEntry>> {
+async fn collect_entries() -> anyhow::Result<Vec<PortEntry>> {
     let mut entries = Vec::new();
 
     if let Ok(local) = local::collect().await {
@@ -75,7 +79,49 @@ pub async fn collect_all() -> anyhow::Result<Vec<PortEntry>> {
         entries.extend(ssh);
     }
 
-    entries.sort_by_key(|e| e.local_port);
+    Ok(entries)
+}
+
+async fn probe_open_ports(entries: &mut [PortEntry]) {
+    let unique_ports: Vec<u16> = {
+        let mut seen = HashMap::new();
+        for e in entries.iter() {
+            seen.entry(e.local_port).or_insert(());
+        }
+        seen.into_keys().collect()
+    };
+
+    let mut handles = Vec::new();
+    for port in unique_ports {
+        handles.push(tokio::spawn(async move {
+            let addr = format!("127.0.0.1:{}", port);
+            let result = tokio::time::timeout(
+                Duration::from_millis(200),
+                TcpStream::connect(&addr),
+            )
+            .await;
+            (port, result.is_ok() && result.unwrap().is_ok())
+        }));
+    }
+
+    let mut results = HashMap::new();
+    for handle in handles {
+        if let Ok((port, is_open)) = handle.await {
+            results.insert(port, is_open);
+        }
+    }
+
+    for entry in entries.iter_mut() {
+        if let Some(&open) = results.get(&entry.local_port) {
+            entry.is_open = open;
+        }
+    }
+}
+
+pub async fn collect_all() -> anyhow::Result<Vec<PortEntry>> {
+    let mut entries = collect_entries().await?;
+    probe_open_ports(&mut entries).await;
+    entries.sort_by_key(|e| (!e.is_open, e.local_port));
     Ok(entries)
 }
 
@@ -90,7 +136,7 @@ pub fn kill_by_pid(pid: u32) -> anyhow::Result<()> {
 }
 
 pub async fn kill_by_port(port: u16) -> anyhow::Result<()> {
-    let entries = collect_all().await?;
+    let entries = collect_entries().await?;
     let entry = entries
         .iter()
         .find(|e| e.local_port == port)
