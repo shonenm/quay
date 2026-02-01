@@ -16,13 +16,15 @@
 | 機能 | 説明 |
 |------|------|
 | ポート一覧 | Local / SSH / Docker を統合表示 |
+| リモートモード | `--remote host` でSSH経由のリモートポートスキャン＋フォワード |
 | フィルタ/検索 | ポート番号、プロセス名で絞り込み |
 | SSH転送作成 | インタラクティブにポートフォワード作成 |
+| Quick Forward | `F` キーで選択ポートを同一番号でそのままフォワード（リモートモード） |
 | プロセス停止 | 選択したポートのプロセスを kill |
 | 自動更新 | 定期的にポート情報を再取得 |
 | プリセット | SSH転送テンプレートをワンキーで起動 |
 | マウスサポート | クリック・スクロール操作（設定で有効化） |
-| 設定ファイル | auto_refresh, refresh_interval, default_filter, mouse_enabled |
+| 設定ファイル | auto_refresh, refresh_interval, default_filter, remote_host, mouse_enabled |
 
 ## データモデル
 
@@ -44,15 +46,21 @@ pub struct PortEntry {
     pub pid: Option<u32>,
     pub container_id: Option<String>,   // Docker の場合
     pub container_name: Option<String>, // Docker の場合
+    pub ssh_host: Option<String>,       // SSH転送のホスト
+    pub is_open: bool,                  // TCP probe 結果 (リモートモード時はlsof結果を信頼)
 }
 ```
 
 ## データ取得方法
 
-### Local Ports (macOS)
+### Local Ports (macOS / Linux)
 
 ```bash
+# ローカル
 lsof -i -P -n -sTCP:LISTEN -Fcpn
+
+# リモートモード
+ssh host "lsof -i -P -n -sTCP:LISTEN -Fcpn"
 ```
 
 出力例（フィールドベース形式）:
@@ -76,7 +84,11 @@ ps aux | grep 'ssh.*-[LR]'
 ### Docker Ports
 
 ```bash
+# ローカル
 docker ps --format '{{.ID}}\t{{.Names}}\t{{.Ports}}'
+
+# リモートモード
+ssh host "docker ps --format '{{.ID}}\t{{.Names}}\t{{.Ports}}'"
 ```
 
 出力例:
@@ -118,6 +130,7 @@ def456  redis     0.0.0.0:6379->6379/tcp
 | `Enter` | 詳細表示 |
 | `K` | 選択したポートを kill |
 | `f` | SSH転送を作成 |
+| `F` | Quick Forward（リモートモード時、同一ポート番号でフォワード） |
 | `r` | リフレッシュ |
 | `1` | Local のみ表示 |
 | `2` | SSH のみ表示 |
@@ -162,6 +175,12 @@ quay/
 ```bash
 # TUI 起動（デフォルト）
 quay
+
+# リモートモード（SSH経由でポートスキャン）
+quay --remote user@server
+quay --remote user@server list
+quay --remote user@server list --json
+quay --remote user@server kill 3000
 
 # 一覧表示（非TUI）
 quay list
@@ -239,6 +258,13 @@ quay dev check 3000 8080        # ポート開閉チェック
 21. [x] マウスサポート
     - クリックで行選択、スクロールでリスト移動
 22. [x] ドキュメント更新
+
+### Phase 7: リモートモード
+23. [x] リモートホスト設定 (config.rs, CLI `--remote` フラグ)
+24. [x] SSH経由のポート収集 (local.rs, docker.rs)
+25. [x] リモート対応 kill (port/mod.rs)
+26. [x] Quick Forward `F` キー (event.rs, main.rs)
+27. [x] リモートモード UI (ui.rs — ヘッダー、フッター、ヘルプ、フォーム)
 
 ## 参考
 

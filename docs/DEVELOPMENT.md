@@ -99,14 +99,17 @@ cargo install --path .
 Tests are located alongside the code:
 
 ```
-src/port/local.rs   → test_parse_lsof_fields, test_parse_lsof_ipv6, test_extract_port
+src/port/local.rs   → test_parse_lsof_fields, test_parse_lsof_ipv6, test_extract_port,
+                      test_parse_lsof_remote_mode
 src/port/docker.rs  → test_parse_docker_ps, test_parse_docker_ps_multiple_ports,
                       test_parse_docker_ps_ipv6, test_parse_docker_ps_empty
 src/port/ssh.rs     → test_parse_ssh_local_forward, test_parse_ssh_remote_forward,
                       test_parse_ssh_multiple_forwards, test_parse_ssh_no_forwards
-src/config.rs       → test_default_config, test_parse_config, test_parse_partial_config
+src/config.rs       → test_default_config, test_parse_config, test_parse_partial_config,
+                      test_parse_config_with_remote_host
 src/preset.rs       → test_default_presets, test_parse_presets
-src/app.rs          → test_refresh_ticks_default, test_should_refresh_uses_refresh_ticks
+src/app.rs          → test_refresh_ticks_default, test_should_refresh_uses_refresh_ticks,
+                      test_is_remote, test_forward_input_for_remote_entry
 src/dev/mod.rs      → test_scenario_lookup, test_scenario_web_ports,
                       test_scenario_micro_has_five, test_scenario_full_has_inactive
 src/dev/mock.rs     → test_mock_entries_not_empty, test_mock_entries_have_all_sources,
@@ -114,6 +117,7 @@ src/dev/mock.rs     → test_mock_entries_not_empty, test_mock_entries_have_all_
                       test_mock_docker_entries_have_container_fields, test_mock_local_entries_have_pid
 src/main.rs         → test_cli_parse_default, test_cli_parse_list,
                       test_cli_parse_forward, test_cli_parse_kill,
+                      test_cli_parse_remote, test_cli_parse_remote_with_list,
                       test_cli_parse_dev_listen, test_cli_parse_dev_listen_http,
                       test_cli_parse_dev_scenario, test_cli_parse_dev_scenario_list,
                       test_cli_parse_dev_check, test_cli_parse_dev_mock
@@ -167,7 +171,27 @@ cargo test
    - Change `default_filter` and verify the TUI starts with the specified filter
    - Remove `config.toml` and verify defaults are applied
 
-7. **Dev Scenarios**
+7. **Remote Mode**
+   ```bash
+   # Start a listener
+   cargo run -- dev listen 19000 --http
+
+   # In another terminal: list remote ports (via SSH to localhost)
+   cargo run -- --remote localhost list
+
+   # TUI with remote scanning
+   cargo run -- --remote localhost
+   # → Header shows [remote: localhost]
+   # → Select port, press F for Quick Forward
+   # → Press f for forward form (SSH Host is locked)
+
+   # Test forwarding (use different local port to avoid collision)
+   # In TUI: f → Local Port: 19001, Remote Port: 19000 → Enter
+   curl -4 localhost:19001
+   ```
+   Note: `--remote localhost` is useful for testing the code path but port collisions occur since remote and local are the same machine. Use different local/remote ports when testing forwards.
+
+8. **Dev Scenarios**
    ```bash
    # TUI with mock data
    cargo run -- dev mock
@@ -205,6 +229,7 @@ cat > ~/.config/quay/config.toml << 'EOF'
 auto_refresh = true
 refresh_interval = 5
 default_filter = "all"
+# remote_host = "user@server"  # optional: default remote host
 
 [ui]
 mouse_enabled = true

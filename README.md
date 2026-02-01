@@ -8,6 +8,7 @@ A TUI port manager for local processes, SSH forwards, and Docker containers.
 ## Features
 
 - **Unified View**: See all ports in one place (local, SSH, Docker)
+- **Remote Mode**: Scan remote hosts via SSH and forward ports with one key (`quay --remote user@server`)
 - **Interactive TUI**: Navigate with keyboard, filter by source, search by name/port
 - **Quick Actions**: Kill processes or create SSH forwards directly from the interface
 - **SSH Presets**: Save frequently used port forwards as presets for one-key launch
@@ -29,6 +30,27 @@ cargo install quay-tui
 ```bash
 quay
 ```
+
+### Remote Mode
+
+Scan remote host ports via SSH and forward them locally:
+
+```bash
+# TUI with remote port scanning
+quay --remote user@server
+
+# List remote ports
+quay --remote user@server list
+quay --remote user@server list --json
+
+# Kill remote process
+quay --remote user@server kill 3000
+```
+
+In remote TUI mode:
+- Header shows `Quay [remote: user@server]`
+- Press `F` on any port to **Quick Forward** (same port number, no form)
+- Press `f` to open the forward form (SSH Host is auto-filled and locked)
 
 ### CLI Commands
 
@@ -69,6 +91,7 @@ quay forward 8080:localhost:80 remote-host -R
 | `Enter` | Show details |
 | `K` | Kill selected process |
 | `f` | Create SSH forward |
+| `F` | Quick forward (remote mode, same port) |
 | `p` | Open presets |
 | `r` | Refresh |
 | `a` | Toggle auto-refresh |
@@ -109,6 +132,7 @@ Configuration files are stored in `~/.config/quay/`.
 auto_refresh = true
 refresh_interval = 5
 default_filter = "all"  # all, local, ssh, docker
+remote_host = "user@server"  # optional: default remote host
 
 [ui]
 mouse_enabled = true

@@ -62,6 +62,8 @@ pub struct PortEntry {
     pub pid: Option<u32>,
     pub container_id: Option<String>,
     pub container_name: Option<String>,
+    pub ssh_host: Option<String>,
+    pub is_open: bool,
 }
 ```
 
@@ -84,6 +86,7 @@ pub struct App {
     pub status_message: Option<(String, u32)>, // Status with TTL
     pub presets: Vec<Preset>,             // SSH forward presets
     pub preset_selected: usize,           // Selected preset index
+    pub remote_host: Option<String>,      // Remote mode SSH host
 }
 
 pub struct ForwardInput {
@@ -99,17 +102,18 @@ pub struct ForwardInput {
 
 ```
 1. Startup
-   main() → run_tui() → port::collect_all()
-                              ↓
-              ┌───────────────┼───────────────┐
-              ↓               ↓               ↓
-         local::collect  docker::collect  ssh::collect
-              ↓               ↓               ↓
-              └───────────────┼───────────────┘
-                              ↓
-                      Vec<PortEntry>
-                              ↓
-                    app.set_entries()
+   main() → run_tui(remote_host) → port::collect_all(remote_host)
+                                          ↓
+                    ┌─────────────────────┼─────────────────────┐
+                    ↓                     ↓                     ↓
+         local::collect(remote)  docker::collect(remote)  ssh::collect()
+         (ssh lsof if remote)   (ssh docker if remote)   (always local)
+                    ↓                     ↓                     ↓
+                    └─────────────────────┼─────────────────────┘
+                                          ↓
+                                  Vec<PortEntry>
+                                          ↓
+                                app.set_entries()
 
 2. Event Loop
    event_handler.next() → KeyEvent
@@ -128,7 +132,11 @@ pub struct ForwardInput {
 ### Local Ports (lsof)
 
 ```bash
+# Local mode
 lsof -i -P -n -sTCP:LISTEN -Fcpn
+
+# Remote mode
+ssh host "lsof -i -P -n -sTCP:LISTEN -Fcpn"
 ```
 
 Output format (field-based):
@@ -141,7 +149,11 @@ n*:3000     # Network address
 ### Docker Ports
 
 ```bash
+# Local mode
 docker ps --format '{{.ID}}\t{{.Names}}\t{{.Ports}}'
+
+# Remote mode
+ssh host "docker ps --format '{{.ID}}\t{{.Names}}\t{{.Ports}}'"
 ```
 
 Output format:
@@ -173,7 +185,7 @@ Event handler functions:
 - `handle_key()` - Normal mode key handling
 - `handle_search_key()` - Search mode input
 - `handle_popup_key()` - Popup dismissal
-- `handle_forward_key()` - Forward creation form input
+- `handle_forward_key()` - Forward creation form input (remote_mode skips SSH Host field)
 - `handle_preset_key()` - Preset selection
 - `handle_mouse()` - Mouse click and scroll handling
 
@@ -229,3 +241,40 @@ Popup rendering uses `centered_rect()` for modal positioning.
 ```
 
 This allows testing the TUI with both open and closed port entries without requiring real services.
+
+## Remote Mode Flow
+
+`quay --remote user@server` scans a remote host's ports via SSH and allows forwarding them locally:
+
+```
+1. Startup
+   CLI --remote flag or config.general.remote_host
+       ↓
+   port::collect_all(Some("user@server"))
+       ↓
+   ┌────────────────────────────────────────────┐
+   │ local::collect(Some(host))                 │
+   │   → ssh host "lsof -i -P -n ..."          │
+   │   → is_open: true (lsof LISTEN = open)     │
+   ├────────────────────────────────────────────┤
+   │ docker::collect(Some(host))                │
+   │   → ssh host "docker ps ..."               │
+   │   → is_open: true                          │
+   ├────────────────────────────────────────────┤
+   │ ssh::collect() ← always local              │
+   │   → ps aux (local SSH tunnel processes)    │
+   │   → TCP probe for is_open                  │
+   └────────────────────────────────────────────┘
+
+2. Quick Forward (F key)
+   selected port → ssh -f -N -L port:localhost:port host
+   (same port number, no form needed)
+
+3. Forward Form (f key)
+   SSH Host field auto-filled with remote host and locked
+   User edits Local Port / Remote Host / Remote Port only
+
+4. Kill
+   SSH entries → local kill (tunnel process is local)
+   Local/Docker entries → ssh host "kill pid" / ssh host "docker stop id"
+```
