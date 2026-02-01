@@ -22,6 +22,25 @@ pub async fn collect() -> Result<Vec<PortEntry>> {
     parse_ssh_forwards(&stdout)
 }
 
+/// Extract the SSH host from the command tokens (everything after `ssh`).
+/// The SSH host is the last token that doesn't start with `-` and doesn't contain `:`.
+fn extract_ssh_host(line: &str) -> Option<String> {
+    // Find the `ssh` command token and take everything after it
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let ssh_pos = tokens.iter().position(|t| {
+        let base = t.rsplit('/').next().unwrap_or(t);
+        base == "ssh"
+    })?;
+    let args = &tokens[ssh_pos + 1..];
+    // Last token that doesn't start with `-` and doesn't contain `:`
+    let last = args.last()?;
+    if !last.starts_with('-') && !last.contains(':') {
+        Some(last.to_string())
+    } else {
+        None
+    }
+}
+
 fn parse_ssh_forwards(output: &str) -> Result<Vec<PortEntry>> {
     let mut entries = Vec::new();
     // -L local_port:remote_host:remote_port
@@ -43,6 +62,7 @@ fn parse_ssh_forwards(output: &str) -> Result<Vec<PortEntry>> {
         }
 
         let pid = parts[1].parse::<u32>().ok();
+        let ssh_host = extract_ssh_host(line);
 
         // Local forwards (-L)
         for cap in local_forward_re.captures_iter(line) {
@@ -60,6 +80,7 @@ fn parse_ssh_forwards(output: &str) -> Result<Vec<PortEntry>> {
                     pid,
                     container_id: None,
                     container_name: None,
+                    ssh_host: ssh_host.clone(),
                     is_open: false,
                 });
             }
@@ -81,6 +102,7 @@ fn parse_ssh_forwards(output: &str) -> Result<Vec<PortEntry>> {
                     pid,
                     container_id: None,
                     container_name: None,
+                    ssh_host: ssh_host.clone(),
                     is_open: false,
                 });
             }
@@ -104,6 +126,7 @@ mod tests {
         assert_eq!(entries[0].remote_host, Some("localhost".to_string()));
         assert_eq!(entries[0].remote_port, Some(80));
         assert_eq!(entries[0].process_name, "ssh");
+        assert_eq!(entries[0].ssh_host, Some("remote".to_string()));
     }
 
     #[test]
@@ -114,6 +137,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].local_port, 3000);
         assert_eq!(entries[0].process_name, "ssh -R");
+        assert_eq!(entries[0].ssh_host, Some("remote".to_string()));
     }
 
     #[test]
@@ -123,6 +147,8 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].local_port, 9000);
         assert_eq!(entries[1].local_port, 9001);
+        assert_eq!(entries[0].ssh_host, Some("remote".to_string()));
+        assert_eq!(entries[1].ssh_host, Some("remote".to_string()));
     }
 
     #[test]
@@ -130,5 +156,42 @@ mod tests {
         let output = "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh remote";
         let entries = parse_ssh_forwards(output).unwrap();
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_ssh_host_with_user_at() {
+        let output =
+            "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -L 9000:localhost:80 user@example.com";
+        let entries = parse_ssh_forwards(output).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].ssh_host, Some("user@example.com".to_string()));
+    }
+
+    #[test]
+    fn test_ssh_host_with_flags() {
+        let output =
+            "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -f -N -L 9000:localhost:80 myserver";
+        let entries = parse_ssh_forwards(output).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].ssh_host, Some("myserver".to_string()));
+    }
+
+    #[test]
+    fn test_extract_ssh_host_basic() {
+        let line = "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -L 9000:localhost:80 bastion";
+        assert_eq!(extract_ssh_host(line), Some("bastion".to_string()));
+    }
+
+    #[test]
+    fn test_extract_ssh_host_none_when_last_is_port_spec() {
+        // Last token contains `:` — not a host
+        let line = "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -L 9000:localhost:80";
+        assert_eq!(extract_ssh_host(line), None);
+    }
+
+    #[test]
+    fn test_extract_ssh_host_none_when_last_is_flag() {
+        let line = "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -L 9000:localhost:80 -N";
+        assert_eq!(extract_ssh_host(line), None);
     }
 }
