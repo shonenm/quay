@@ -34,9 +34,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
-    let title_text = match &app.remote_host {
-        Some(host) => format!("Quay [remote: {}]", host),
-        None => "Quay - Port Manager".to_string(),
+    let title_text = match (&app.remote_host, &app.docker_target) {
+        (Some(host), Some(target)) => format!("Quay [remote: {}] [docker: {}]", host, target),
+        (None, Some(target)) => format!("Quay [docker: {}]", target),
+        (Some(host), None) => format!("Quay [remote: {}]", host),
+        (None, None) => "Quay - Port Manager".to_string(),
     };
     let title = Paragraph::new(title_text)
         .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
@@ -140,7 +142,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         let help_text = match app.input_mode {
             InputMode::Search => "[Enter/Esc] Done  [Backspace] Delete".to_string(),
             InputMode::Normal => {
-                if app.is_remote() {
+                if app.is_remote() || app.is_docker_target() {
                     "[j/k] Navigate  [Enter] Details  [F] Quick Forward  [f] Forward  [K] Kill  [?] Help  [q] Quit".to_string()
                 } else {
                     "[j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [p] Presets  [?] Help  [q] Quit".to_string()
@@ -255,8 +257,18 @@ fn draw_help_popup(frame: &mut Frame, app: &App) {
         Line::from("  f       New SSH forward"),
     ];
 
-    if app.is_remote() {
+    if app.is_remote() || app.is_docker_target() {
         lines.push(Line::from("  F       Quick forward (same port)"));
+    }
+
+    if app.is_docker_target() {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("Docker Target", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+        lines.push(Line::from("  Container ports discovered via ss"));
+        if let Some(ref ip) = app.container_ip {
+            lines.push(Line::from(format!("  Container IP: {}", ip)));
+        }
+        lines.push(Line::from("  F tunnels through SSH to container"));
     }
 
     lines.extend([
@@ -298,10 +310,15 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
     };
 
     let is_remote = app.is_remote();
+    let is_docker_target = app.is_docker_target();
 
     let field_style = |field: ForwardField| {
         // In remote mode, SSH Host is locked/dimmed
         if is_remote && field == ForwardField::SshHost {
+            return Style::default().fg(Color::DarkGray);
+        }
+        // In docker target mode, Remote Host is also locked (container IP)
+        if is_docker_target && field == ForwardField::RemoteHost {
             return Style::default().fg(Color::DarkGray);
         }
         let valid = field_valid(field);
@@ -349,11 +366,19 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
             Span::styled(input.local_port.as_str(), field_style(ForwardField::LocalPort)),
             cursor(ForwardField::LocalPort),
         ]),
-        Line::from(vec![
-            Span::styled("Remote Host: ", field_style(ForwardField::RemoteHost)),
-            Span::styled(input.remote_host.as_str(), field_style(ForwardField::RemoteHost)),
-            cursor(ForwardField::RemoteHost),
-        ]),
+        Line::from(if is_docker_target {
+            vec![
+                Span::styled("Remote Host: ", field_style(ForwardField::RemoteHost)),
+                Span::styled(input.remote_host.as_str(), field_style(ForwardField::RemoteHost)),
+                Span::styled(" (container IP)", Style::default().fg(Color::DarkGray)),
+            ]
+        } else {
+            vec![
+                Span::styled("Remote Host: ", field_style(ForwardField::RemoteHost)),
+                Span::styled(input.remote_host.as_str(), field_style(ForwardField::RemoteHost)),
+                cursor(ForwardField::RemoteHost),
+            ]
+        }),
         Line::from(vec![
             Span::styled("Remote Port: ", field_style(ForwardField::RemotePort)),
             Span::styled(input.remote_port.as_str(), field_style(ForwardField::RemotePort)),

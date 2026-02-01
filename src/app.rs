@@ -165,6 +165,8 @@ pub struct App {
     pub presets: Vec<Preset>,
     pub preset_selected: usize,
     pub remote_host: Option<String>,
+    pub docker_target: Option<String>,
+    pub container_ip: Option<String>,
 }
 
 impl App {
@@ -186,11 +188,17 @@ impl App {
             presets: Vec::new(),
             preset_selected: 0,
             remote_host: None,
+            docker_target: None,
+            container_ip: None,
         }
     }
 
     pub fn is_remote(&self) -> bool {
         self.remote_host.is_some()
+    }
+
+    pub fn is_docker_target(&self) -> bool {
+        self.docker_target.is_some()
     }
 
     pub fn preset_next(&mut self) {
@@ -433,6 +441,7 @@ mod tests {
             container_name: None,
             ssh_host: None,
             is_open: true,
+            is_loopback: false,
         };
         let input = ForwardInput::from_entry(&entry);
         assert_eq!(input.local_port, "3000");
@@ -455,6 +464,7 @@ mod tests {
             container_name: None,
             ssh_host: Some("myserver".to_string()),
             is_open: true,
+            is_loopback: false,
         };
         let input = ForwardInput::from_entry(&entry);
         assert_eq!(input.local_port, "9000");
@@ -493,6 +503,14 @@ mod tests {
     }
 
     #[test]
+    fn test_is_docker_target() {
+        let mut app = App::new();
+        assert!(!app.is_docker_target());
+        app.docker_target = Some("my-container".to_string());
+        assert!(app.is_docker_target());
+    }
+
+    #[test]
     fn test_forward_input_for_remote_entry() {
         let entry = PortEntry {
             source: PortSource::Local,
@@ -505,6 +523,7 @@ mod tests {
             container_name: None,
             ssh_host: None,
             is_open: true,
+            is_loopback: false,
         };
         let input = ForwardInput::for_remote_entry(&entry, "user@server");
         assert_eq!(input.local_port, "18080");

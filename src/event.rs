@@ -77,7 +77,12 @@ pub fn handle_search_key(key: KeyEvent, query: &mut String) -> Option<Action> {
     }
 }
 
-pub fn handle_forward_key(key: KeyEvent, input: &mut ForwardInput, remote_mode: bool) -> Option<Action> {
+pub fn handle_forward_key(key: KeyEvent, input: &mut ForwardInput, remote_mode: bool, docker_mode: bool) -> Option<Action> {
+    let is_locked = |field: ForwardField| -> bool {
+        (remote_mode && field == ForwardField::SshHost)
+            || (docker_mode && field == ForwardField::RemoteHost)
+    };
+
     match key.code {
         KeyCode::Esc => Some(Action::ClosePopup),
         KeyCode::Enter => {
@@ -89,30 +94,35 @@ pub fn handle_forward_key(key: KeyEvent, input: &mut ForwardInput, remote_mode: 
         }
         KeyCode::Tab | KeyCode::Down => {
             input.active_field = input.active_field.next();
-            // In remote mode, skip the SshHost field (it's locked)
-            if remote_mode && input.active_field == ForwardField::SshHost {
+            // Skip locked fields
+            if is_locked(input.active_field) {
+                input.active_field = input.active_field.next();
+            }
+            // Second skip in case both are locked (remote+docker)
+            if is_locked(input.active_field) {
                 input.active_field = input.active_field.next();
             }
             None
         }
         KeyCode::BackTab | KeyCode::Up => {
             input.active_field = input.active_field.prev();
-            if remote_mode && input.active_field == ForwardField::SshHost {
+            if is_locked(input.active_field) {
+                input.active_field = input.active_field.prev();
+            }
+            if is_locked(input.active_field) {
                 input.active_field = input.active_field.prev();
             }
             None
         }
         KeyCode::Backspace => {
-            // In remote mode, don't allow editing SSH Host
-            if remote_mode && input.active_field == ForwardField::SshHost {
+            if is_locked(input.active_field) {
                 return None;
             }
             input.active_value().pop();
             None
         }
         KeyCode::Char(c) => {
-            // In remote mode, don't allow editing SSH Host
-            if remote_mode && input.active_field == ForwardField::SshHost {
+            if is_locked(input.active_field) {
                 return None;
             }
             input.active_value().push(c);

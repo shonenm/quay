@@ -29,6 +29,10 @@ struct Cli {
     #[arg(short, long)]
     remote: Option<String>,
 
+    /// Docker container to scan ports inside (e.g., syntopic-dev)
+    #[arg(short = 'd', long)]
+    docker: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -79,13 +83,14 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Resolve remote_host: CLI flag takes precedence over config
+    // Resolve remote_host and docker_target: CLI flags take precedence over config
     let config = config::Config::load();
     let remote_host = cli.remote.or(config.general.remote_host);
+    let docker_target = cli.docker.or(config.general.docker_target);
 
     match cli.command {
         Some(Commands::List { json, local, ssh, docker }) => {
-            run_list(json, local, ssh, docker, remote_host.as_deref()).await
+            run_list(json, local, ssh, docker, remote_host.as_deref(), docker_target.as_deref()).await
         }
         Some(Commands::Forward { spec, host, remote }) => {
             run_forward(&spec, &host, remote).await
@@ -94,12 +99,12 @@ async fn main() -> Result<()> {
             run_kill(port, pid, remote_host.as_deref()).await
         }
         Some(Commands::Dev { command }) => dev::run_dev(command).await,
-        None => run_tui(remote_host).await,
+        None => run_tui(remote_host, docker_target).await,
     }
 }
 
-async fn run_list(json: bool, local: bool, ssh: bool, docker: bool, remote_host: Option<&str>) -> Result<()> {
-    let entries = port::collect_all(remote_host).await?;
+async fn run_list(json: bool, local: bool, ssh: bool, docker: bool, remote_host: Option<&str>, docker_target: Option<&str>) -> Result<()> {
+    let entries = port::collect_all(remote_host, docker_target).await?;
 
     let filtered: Vec<_> = entries
         .into_iter()
@@ -131,6 +136,7 @@ async fn run_list(json: bool, local: bool, ssh: bool, docker: bool, remote_host:
                     "container_id": e.container_id,
                     "container_name": e.container_name,
                     "ssh_host": e.ssh_host,
+                    "is_loopback": e.is_loopback,
                 })
             })
             .collect();
@@ -183,11 +189,11 @@ async fn run_kill(port: u16, pid: Option<u32>, remote_host: Option<&str>) -> Res
     Ok(())
 }
 
-async fn run_tui(remote_host: Option<String>) -> Result<()> {
-    run_tui_with_entries(None, remote_host).await
+async fn run_tui(remote_host: Option<String>, docker_target: Option<String>) -> Result<()> {
+    run_tui_with_entries(None, remote_host, docker_target).await
 }
 
-pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote_host: Option<String>) -> Result<()> {
+pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote_host: Option<String>, docker_target: Option<String>) -> Result<()> {
     let mock_mode = initial.is_some();
 
     // Load config first (needed for terminal setup)
@@ -208,6 +214,15 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
     // Create app state
     let mut app = App::new();
     app.remote_host = remote_host;
+    app.docker_target = docker_target;
+
+    // Resolve container IP for docker target mode
+    if let Some(ref target) = app.docker_target {
+        match port::docker::get_container_ip(target, app.remote_host.as_deref()) {
+            Ok(ip) => app.container_ip = Some(ip),
+            Err(e) => app.set_status(&format!("Container IP lookup failed: {}", e)),
+        }
+    }
 
     // Apply config settings
     if !mock_mode {
@@ -230,7 +245,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
         app.set_entries(entries);
         app.set_status("[mock] Loaded mock data");
     } else {
-        match port::collect_all(app.remote_host.as_deref()).await {
+        match port::collect_all(app.remote_host.as_deref(), app.docker_target.as_deref()).await {
             Ok(entries) => app.set_entries(entries),
             Err(e) => app.set_status(&format!("Load failed: {}", e)),
         }
@@ -248,7 +263,8 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
                 // Handle Forward popup specially (needs input handling)
                 if app.popup == Popup::Forward {
                     let remote_mode = app.is_remote();
-                    if let Some(action) = handle_forward_key(key, &mut app.forward_input, remote_mode) {
+                    let docker_mode = app.is_docker_target();
+                    if let Some(action) = handle_forward_key(key, &mut app.forward_input, remote_mode, docker_mode) {
                         match action {
                             Action::ClosePopup => {
                                 app.popup = Popup::None;
@@ -270,6 +286,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
                                             container_name: None,
                                             ssh_host: Some(app.forward_input.ssh_host.clone()),
                                             is_open: true,
+                                            is_loopback: false,
                                         };
                                         let mut entries = app.entries.clone();
                                         entries.push(mock_entry);
@@ -284,7 +301,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
                                         match port::ssh::create_forward(&spec, &host, false) {
                                             Ok(pid) => {
                                                 app.set_status(&format!("Forward created (PID: {})", pid));
-                                                if let Ok(entries) = port::collect_all(app.remote_host.as_deref()).await {
+                                                if let Ok(entries) = port::collect_all(app.remote_host.as_deref(), app.docker_target.as_deref()).await {
                                                     app.set_entries(entries);
                                                 }
                                             }
@@ -322,7 +339,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
                                         match port::ssh::create_forward(&spec, &host, false) {
                                             Ok(pid) => {
                                                 app.set_status(&format!("Forward created (PID: {})", pid));
-                                                if let Ok(entries) = port::collect_all(app.remote_host.as_deref()).await {
+                                                if let Ok(entries) = port::collect_all(app.remote_host.as_deref(), app.docker_target.as_deref()).await {
                                                     app.set_entries(entries);
                                                 }
                                             }
@@ -381,7 +398,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
                             if mock_mode {
                                 // no-op in mock mode
                             } else {
-                                match port::collect_all(app.remote_host.as_deref()).await {
+                                match port::collect_all(app.remote_host.as_deref(), app.docker_target.as_deref()).await {
                                     Ok(entries) => {
                                         app.set_entries(entries);
                                         app.set_status("Refreshed");
@@ -403,6 +420,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
                         Action::Kill => {
                             if let Some(entry) = app.selected_entry() {
                                 let port = entry.local_port;
+                                let pid = entry.pid;
                                 let is_ssh = entry.source == port::PortSource::Ssh;
                                 if mock_mode {
                                     // Remove entry from list in mock mode
@@ -412,13 +430,41 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
                                         .collect();
                                     app.set_entries(entries);
                                     app.set_status(&format!("[mock] Removed port {}", port));
+                                } else if app.is_docker_target() {
+                                    // Docker target mode: kill process inside container
+                                    if let Some(pid) = pid {
+                                        if let Some(ref target) = app.docker_target {
+                                            let kill_cmd = format!("docker exec {} kill {}", target, pid);
+                                            let result = match app.remote_host.as_deref() {
+                                                Some(host) => std::process::Command::new("ssh")
+                                                    .arg(host)
+                                                    .arg(&kill_cmd)
+                                                    .status(),
+                                                None => std::process::Command::new("docker")
+                                                    .args(["exec", target, "kill", &pid.to_string()])
+                                                    .status(),
+                                            };
+                                            match result {
+                                                Ok(status) if status.success() => {
+                                                    app.set_status(&format!("Killed PID {} in container", pid));
+                                                    if let Ok(entries) = port::collect_all(app.remote_host.as_deref(), app.docker_target.as_deref()).await {
+                                                        app.set_entries(entries);
+                                                    }
+                                                }
+                                                Ok(_) => app.set_status(&format!("Kill failed for PID {} in container", pid)),
+                                                Err(e) => app.set_status(&format!("Kill failed: {}", e)),
+                                            }
+                                        }
+                                    } else {
+                                        app.set_status("No PID available for this port (container ss doesn't report PIDs)");
+                                    }
                                 } else {
                                     // SSH tunnels are always killed locally
                                     let kill_host = if is_ssh { None } else { app.remote_host.as_deref() };
                                     match port::kill_by_port(port, kill_host).await {
                                         Ok(_) => {
                                             app.set_status(&format!("Killed process on port {}", port));
-                                            if let Ok(entries) = port::collect_all(app.remote_host.as_deref()).await {
+                                            if let Ok(entries) = port::collect_all(app.remote_host.as_deref(), app.docker_target.as_deref()).await {
                                                 app.set_entries(entries);
                                             }
                                         }
@@ -436,9 +482,15 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
                             app.popup = Popup::Help;
                         }
                         Action::StartForward => {
-                            app.forward_input = match (app.selected_entry(), app.remote_host.as_deref()) {
-                                (Some(entry), Some(host)) => ForwardInput::for_remote_entry(entry, host),
-                                (Some(entry), None) => ForwardInput::from_entry(entry),
+                            app.forward_input = match (app.selected_entry(), app.remote_host.as_deref(), app.container_ip.as_deref()) {
+                                // Docker target + remote: pre-fill container_ip as remote_host, lock ssh_host to remote_host
+                                (Some(entry), Some(host), Some(ip)) => {
+                                    let mut input = ForwardInput::for_remote_entry(entry, host);
+                                    input.remote_host = ip.to_string();
+                                    input
+                                }
+                                (Some(entry), Some(host), None) => ForwardInput::for_remote_entry(entry, host),
+                                (Some(entry), None, _) => ForwardInput::from_entry(entry),
                                 _ => ForwardInput::new(),
                             };
                             app.popup = Popup::Forward;
@@ -454,12 +506,25 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
                             if let Some(entry) = app.selected_entry() {
                                 let port = entry.local_port;
                                 if let Some(host) = app.remote_host.clone() {
-                                    let spec = format!("{}:localhost:{}", port, port);
+                                    // In docker target mode, forward to container_ip
+                                    // In regular remote mode, forward to localhost on remote
+                                    let forward_target = if app.is_docker_target() {
+                                        match app.container_ip.as_deref() {
+                                            Some(ip) => ip.to_string(),
+                                            None => {
+                                                app.set_status("Container IP not available");
+                                                continue;
+                                            }
+                                        }
+                                    } else {
+                                        "localhost".to_string()
+                                    };
+                                    let spec = format!("{}:{}:{}", port, forward_target, port);
                                     if mock_mode {
                                         let mock_entry = PortEntry {
                                             source: port::PortSource::Ssh,
                                             local_port: port,
-                                            remote_host: Some("localhost".to_string()),
+                                            remote_host: Some(forward_target.clone()),
                                             remote_port: Some(port),
                                             process_name: "ssh".to_string(),
                                             pid: Some(99999),
@@ -467,6 +532,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
                                             container_name: None,
                                             ssh_host: Some(host.clone()),
                                             is_open: true,
+                                            is_loopback: false,
                                         };
                                         let mut entries = app.entries.clone();
                                         entries.push(mock_entry);
@@ -477,7 +543,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
                                         match port::ssh::create_forward(&spec, &host, false) {
                                             Ok(pid) => {
                                                 app.set_status(&format!("Forward :{} -> {}:{} (PID: {})", port, host, port, pid));
-                                                if let Ok(entries) = port::collect_all(app.remote_host.as_deref()).await {
+                                                if let Ok(entries) = port::collect_all(app.remote_host.as_deref(), app.docker_target.as_deref()).await {
                                                     app.set_entries(entries);
                                                 }
                                             }
@@ -486,6 +552,8 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
                                             }
                                         }
                                     }
+                                } else if app.is_docker_target() {
+                                    app.set_status("Quick Forward for local Docker not yet supported");
                                 } else {
                                     app.set_status("Quick Forward requires --remote mode");
                                 }
@@ -522,7 +590,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote
             AppEvent::Tick => {
                 app.tick();
                 if !mock_mode && app.should_refresh() {
-                    match port::collect_all(app.remote_host.as_deref()).await {
+                    match port::collect_all(app.remote_host.as_deref(), app.docker_target.as_deref()).await {
                         Ok(entries) => app.set_entries(entries),
                         Err(e) => app.set_status(&format!("Auto-refresh failed: {}", e)),
                     }
@@ -555,6 +623,7 @@ mod tests {
         let cli = Cli::try_parse_from(["quay"]).unwrap();
         assert!(cli.command.is_none());
         assert!(cli.remote.is_none());
+        assert!(cli.docker.is_none());
     }
 
     #[test]
@@ -623,5 +692,29 @@ mod tests {
     fn test_cli_parse_dev_mock() {
         let cli = Cli::try_parse_from(["quay", "dev", "mock"]).unwrap();
         assert!(matches!(cli.command, Some(Commands::Dev { .. })));
+    }
+
+    #[test]
+    fn test_cli_parse_docker() {
+        let cli = Cli::try_parse_from(["quay", "--docker", "my-container"]).unwrap();
+        assert_eq!(cli.docker, Some("my-container".to_string()));
+        assert!(cli.remote.is_none());
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_parse_remote_docker() {
+        let cli = Cli::try_parse_from(["quay", "--remote", "ailab", "--docker", "syntopic-dev"]).unwrap();
+        assert_eq!(cli.remote, Some("ailab".to_string()));
+        assert_eq!(cli.docker, Some("syntopic-dev".to_string()));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_parse_docker_short_flag() {
+        let cli = Cli::try_parse_from(["quay", "-r", "ailab", "-d", "syntopic-dev", "list"]).unwrap();
+        assert_eq!(cli.remote, Some("ailab".to_string()));
+        assert_eq!(cli.docker, Some("syntopic-dev".to_string()));
+        assert!(matches!(cli.command, Some(Commands::List { .. })));
     }
 }

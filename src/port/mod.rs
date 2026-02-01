@@ -36,6 +36,7 @@ pub struct PortEntry {
     pub container_name: Option<String>,
     pub ssh_host: Option<String>,
     pub is_open: bool,
+    pub is_loopback: bool,
 }
 
 impl PortEntry {
@@ -125,9 +126,18 @@ async fn probe_open_ports(entries: &mut [PortEntry], remote_mode: bool) {
     }
 }
 
-pub async fn collect_all(remote_host: Option<&str>) -> anyhow::Result<Vec<PortEntry>> {
-    let mut entries = collect_entries(remote_host).await?;
-    probe_open_ports(&mut entries, remote_host.is_some()).await;
+pub async fn collect_all(
+    remote_host: Option<&str>,
+    docker_target: Option<&str>,
+) -> anyhow::Result<Vec<PortEntry>> {
+    let mut entries = if let Some(container) = docker_target {
+        // Docker target mode: only collect from inside the specified container
+        docker::collect_from_container(container, remote_host).await?
+    } else {
+        let mut e = collect_entries(remote_host).await?;
+        probe_open_ports(&mut e, remote_host.is_some()).await;
+        e
+    };
     entries.sort_by_key(|e| (!e.is_open, e.local_port));
     Ok(entries)
 }

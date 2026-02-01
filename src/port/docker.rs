@@ -1,6 +1,7 @@
 use super::{PortEntry, PortSource};
 use anyhow::Result;
 use regex::Regex;
+use std::collections::HashSet;
 use std::process::Command;
 
 pub async fn collect(remote_host: Option<&str>) -> Result<Vec<PortEntry>> {
@@ -81,6 +82,7 @@ fn parse_docker_ps(output: &str, remote_mode: bool) -> Result<Vec<PortEntry>> {
                                 container_name: Some(container_name.clone()),
                                 ssh_host: None,
                                 is_open: remote_mode,
+                                is_loopback: false,
                             });
                         }
                     }
@@ -99,6 +101,7 @@ fn parse_docker_ps(output: &str, remote_mode: bool) -> Result<Vec<PortEntry>> {
                             container_name: Some(container_name.clone()),
                             ssh_host: None,
                             is_open: remote_mode,
+                            is_loopback: false,
                         });
                     }
                 }
@@ -107,6 +110,146 @@ fn parse_docker_ps(output: &str, remote_mode: bool) -> Result<Vec<PortEntry>> {
     }
 
     Ok(entries)
+}
+
+/// Collect LISTEN ports from inside a Docker container via `ss -tln`.
+/// When remote_host is Some, the command is run via SSH on the remote host.
+pub async fn collect_from_container(
+    container: &str,
+    remote_host: Option<&str>,
+) -> Result<Vec<PortEntry>> {
+    let docker_cmd = format!("docker exec {} ss -tln", container);
+    let output = match remote_host {
+        Some(host) => {
+            match Command::new("ssh").arg(host).arg(&docker_cmd).output() {
+                Ok(o) => o,
+                Err(e) => anyhow::bail!("Failed to run ss in container via SSH: {}", e),
+            }
+        }
+        None => {
+            match Command::new("docker")
+                .args(["exec", container, "ss", "-tln"])
+                .output()
+            {
+                Ok(o) => o,
+                Err(e) => anyhow::bail!("Failed to run ss in container: {}", e),
+            }
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("ss command failed in container '{}': {}", container, stderr.trim());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_ss_output(&stdout, container)
+}
+
+/// Parse `ss -tln` output from inside a container.
+///
+/// Example output:
+/// ```text
+/// State  Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process
+/// LISTEN 0      511           *:3000              *:*
+/// LISTEN 0      511     0.0.0.0:5173        0.0.0.0:*
+/// LISTEN 0      128     127.0.0.1:5432      0.0.0.0:*
+/// LISTEN 0      511        [::]:3000           [::]:*
+/// ```
+fn parse_ss_output(output: &str, container_name: &str) -> Result<Vec<PortEntry>> {
+    let mut entries = Vec::new();
+    let mut seen_ports = HashSet::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        // Skip header and empty lines
+        if trimmed.is_empty() || trimmed.starts_with("State") {
+            continue;
+        }
+        if !trimmed.starts_with("LISTEN") {
+            continue;
+        }
+
+        let fields: Vec<&str> = trimmed.split_whitespace().collect();
+        if fields.len() < 4 {
+            continue;
+        }
+
+        let local_addr = fields[3];
+        // Extract port: last segment after ':'
+        let port = match local_addr.rsplit(':').next().and_then(|p| p.parse::<u16>().ok()) {
+            Some(p) if p > 0 => p,
+            _ => continue,
+        };
+
+        // Determine bind address for forwardability
+        let bind_addr = &local_addr[..local_addr.rfind(':').unwrap_or(0)];
+        let is_loopback = bind_addr == "127.0.0.1" || bind_addr == "[::1]";
+
+        // Deduplicate IPv4/IPv6 entries for the same port
+        if !seen_ports.insert(port) {
+            continue;
+        }
+
+        // Extract process name from Process column if available
+        let process_name = if fields.len() > 5 {
+            // Process column may contain "users:(("name",...))"
+            let proc_field = fields[5..].join(" ");
+            if let Some(start) = proc_field.find("((\"") {
+                if let Some(end) = proc_field[start + 3..].find('"') {
+                    proc_field[start + 3..start + 3 + end].to_string()
+                } else {
+                    container_name.to_string()
+                }
+            } else {
+                container_name.to_string()
+            }
+        } else {
+            container_name.to_string()
+        };
+
+        entries.push(PortEntry {
+            source: PortSource::Docker,
+            local_port: port,
+            remote_host: Some(container_name.to_string()),
+            remote_port: Some(port),
+            process_name,
+            pid: None,
+            container_id: None,
+            container_name: Some(container_name.to_string()),
+            ssh_host: None,
+            is_open: true,
+            is_loopback,
+        });
+    }
+
+    Ok(entries)
+}
+
+/// Get the IP address of a Docker container.
+/// Uses `docker inspect` to retrieve the container's IP from its network settings.
+pub fn get_container_ip(container: &str, remote_host: Option<&str>) -> Result<String> {
+    let inspect_fmt = "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}";
+    let output = match remote_host {
+        Some(host) => {
+            let cmd = format!("docker inspect -f '{}' {}", inspect_fmt, container);
+            Command::new("ssh").arg(host).arg(&cmd).output()?
+        }
+        None => Command::new("docker")
+            .args(["inspect", "-f", inspect_fmt, container])
+            .output()?,
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to get container IP for '{}': {}", container, stderr.trim());
+    }
+
+    let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if ip.is_empty() {
+        anyhow::bail!("Container '{}' has no IP address", container);
+    }
+    Ok(ip)
 }
 
 #[cfg(test)]
@@ -176,6 +319,73 @@ mod tests {
     #[test]
     fn test_parse_docker_ps_empty() {
         let entries = parse_docker_ps("", false).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ss_output() {
+        let output = "\
+State  Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process
+LISTEN 0      511           *:3000              *:*
+LISTEN 0      511     0.0.0.0:5173        0.0.0.0:*
+";
+        let entries = parse_ss_output(output, "mycontainer").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].local_port, 3000);
+        assert_eq!(entries[0].source, PortSource::Docker);
+        assert!(entries[0].is_open);
+        assert!(!entries[0].is_loopback);
+        assert_eq!(entries[0].container_name, Some("mycontainer".to_string()));
+        assert_eq!(entries[0].process_name, "mycontainer");
+        assert_eq!(entries[1].local_port, 5173);
+        assert!(!entries[1].is_loopback);
+    }
+
+    #[test]
+    fn test_parse_ss_output_ipv6_dedup() {
+        let output = "\
+State  Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process
+LISTEN 0      511           *:3000              *:*
+LISTEN 0      511        [::]:3000           [::]:*
+LISTEN 0      511     0.0.0.0:5173        0.0.0.0:*
+LISTEN 0      511        [::]:5173           [::]:*
+";
+        let entries = parse_ss_output(output, "test").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].local_port, 3000);
+        assert_eq!(entries[1].local_port, 5173);
+    }
+
+    #[test]
+    fn test_parse_ss_output_loopback() {
+        let output = "\
+State  Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process
+LISTEN 0      128     127.0.0.1:5432      0.0.0.0:*
+LISTEN 0      511     0.0.0.0:3000        0.0.0.0:*
+";
+        let entries = parse_ss_output(output, "test").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].local_port, 5432);
+        assert!(entries[0].is_loopback);
+        assert_eq!(entries[1].local_port, 3000);
+        assert!(!entries[1].is_loopback);
+    }
+
+    #[test]
+    fn test_parse_ss_output_with_process() {
+        let output = "\
+State  Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process
+LISTEN 0      511     0.0.0.0:3000        0.0.0.0:*     users:((\"node\",pid=123,fd=4))
+";
+        let entries = parse_ss_output(output, "mycontainer").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].process_name, "node");
+    }
+
+    #[test]
+    fn test_parse_ss_output_empty() {
+        let output = "State  Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process\n";
+        let entries = parse_ss_output(output, "test").unwrap();
         assert!(entries.is_empty());
     }
 }

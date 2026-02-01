@@ -82,6 +82,7 @@ fn parse_ssh_forwards(output: &str) -> Result<Vec<PortEntry>> {
                     container_name: None,
                     ssh_host: ssh_host.clone(),
                     is_open: false,
+                    is_loopback: false,
                 });
             }
         }
@@ -104,6 +105,7 @@ fn parse_ssh_forwards(output: &str) -> Result<Vec<PortEntry>> {
                     container_name: None,
                     ssh_host: ssh_host.clone(),
                     is_open: false,
+                    is_loopback: false,
                 });
             }
         }

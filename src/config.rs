@@ -20,6 +20,8 @@ pub struct GeneralConfig {
     pub default_filter: String,
     #[serde(default)]
     pub remote_host: Option<String>,
+    #[serde(default)]
+    pub docker_target: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -43,6 +45,7 @@ impl Default for GeneralConfig {
             refresh_interval: default_refresh_interval(),
             default_filter: default_filter(),
             remote_host: None,
+            docker_target: None,
         }
     }
 }
@@ -81,6 +84,7 @@ mod tests {
         assert_eq!(config.general.refresh_interval, 5);
         assert_eq!(config.general.default_filter, "all");
         assert!(config.general.remote_host.is_none());
+        assert!(config.general.docker_target.is_none());
         assert!(!config.ui.mouse_enabled);
     }
 
@@ -123,5 +127,17 @@ remote_host = "user@server"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.general.remote_host, Some("user@server".to_string()));
+    }
+
+    #[test]
+    fn test_parse_config_with_docker_target() {
+        let toml = r#"
+[general]
+remote_host = "ailab"
+docker_target = "syntopic-dev"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.general.remote_host, Some("ailab".to_string()));
+        assert_eq!(config.general.docker_target, Some("syntopic-dev".to_string()));
     }
 }

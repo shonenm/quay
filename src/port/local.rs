@@ -52,6 +52,7 @@ fn parse_lsof_fields(output: &str, remote_mode: bool) -> Result<Vec<PortEntry>> 
                         ssh_host: None,
                         // Remote lsof LISTEN = definitely open on the remote side
                         is_open: remote_mode,
+                        is_loopback: false,
                     });
                 }
             }
