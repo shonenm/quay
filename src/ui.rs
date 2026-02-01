@@ -18,7 +18,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         ])
         .split(frame.area());
 
-    draw_header(frame, chunks[0]);
+    draw_header(frame, app, chunks[0]);
     draw_filter_bar(frame, app, chunks[1]);
     draw_table(frame, app, chunks[2]);
     draw_footer(frame, app, chunks[3]);
@@ -26,15 +26,19 @@ pub fn draw(frame: &mut Frame, app: &App) {
     // Draw popup if active
     match app.popup {
         Popup::Details => draw_details_popup(frame, app),
-        Popup::Help => draw_help_popup(frame),
+        Popup::Help => draw_help_popup(frame, app),
         Popup::Forward => draw_forward_popup(frame, app),
         Popup::Presets => draw_presets_popup(frame, app),
         Popup::None => {}
     }
 }
 
-fn draw_header(frame: &mut Frame, area: Rect) {
-    let title = Paragraph::new("Quay - Port Manager")
+fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
+    let title_text = match &app.remote_host {
+        Some(host) => format!("Quay [remote: {}]", host),
+        None => "Quay - Port Manager".to_string(),
+    };
+    let title = Paragraph::new(title_text)
         .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
         .block(Block::default().borders(Borders::ALL));
     frame.render_widget(title, area);
@@ -134,8 +138,14 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(Span::styled(message, Style::default().fg(Color::Yellow)))
     } else {
         let help_text = match app.input_mode {
-            InputMode::Search => "[Enter/Esc] Done  [Backspace] Delete",
-            InputMode::Normal => "[j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [p] Presets  [?] Help  [q] Quit",
+            InputMode::Search => "[Enter/Esc] Done  [Backspace] Delete".to_string(),
+            InputMode::Normal => {
+                if app.is_remote() {
+                    "[j/k] Navigate  [Enter] Details  [F] Quick Forward  [f] Forward  [K] Kill  [?] Help  [q] Quit".to_string()
+                } else {
+                    "[j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [p] Presets  [?] Help  [q] Quit".to_string()
+                }
+            }
         };
         Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)))
     };
@@ -221,11 +231,11 @@ fn draw_details_popup(frame: &mut Frame, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
-fn draw_help_popup(frame: &mut Frame) {
+fn draw_help_popup(frame: &mut Frame, app: &App) {
     let area = centered_rect(50, 70, frame.area());
     frame.render_widget(Clear, area);
 
-    let lines = vec![
+    let mut lines = vec![
         Line::from(Span::styled("Navigation", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from("  j/↓     Move down"),
         Line::from("  k/↑     Move up"),
@@ -243,6 +253,13 @@ fn draw_help_popup(frame: &mut Frame) {
         Line::from("  Enter   Show details"),
         Line::from("  K       Kill process"),
         Line::from("  f       New SSH forward"),
+    ];
+
+    if app.is_remote() {
+        lines.push(Line::from("  F       Quick forward (same port)"));
+    }
+
+    lines.extend([
         Line::from("  p       Show presets"),
         Line::from("  r       Refresh"),
         Line::from("  a       Toggle auto-refresh"),
@@ -252,7 +269,7 @@ fn draw_help_popup(frame: &mut Frame) {
             Span::styled("[Esc] ", Style::default().fg(Color::DarkGray)),
             Span::raw("Close"),
         ]),
-    ];
+    ]);
 
     let paragraph = Paragraph::new(lines)
         .block(
@@ -271,20 +288,54 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
     let input = &app.forward_input;
     let active = input.active_field;
 
+    let field_valid = |field: ForwardField| -> bool {
+        match field {
+            ForwardField::LocalPort => input.is_local_port_valid(),
+            ForwardField::RemoteHost => input.is_remote_host_valid(),
+            ForwardField::RemotePort => input.is_remote_port_valid(),
+            ForwardField::SshHost => input.is_ssh_host_valid(),
+        }
+    };
+
+    let is_remote = app.is_remote();
+
     let field_style = |field: ForwardField| {
+        // In remote mode, SSH Host is locked/dimmed
+        if is_remote && field == ForwardField::SshHost {
+            return Style::default().fg(Color::DarkGray);
+        }
+        let valid = field_valid(field);
         if field == active {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-        } else {
+            if valid {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            }
+        } else if valid {
             Style::default().fg(Color::White)
+        } else {
+            Style::default().fg(Color::Red)
         }
     };
 
     let cursor = |field: ForwardField| {
         if field == active {
-            Span::styled("_", Style::default().fg(Color::Yellow).add_modifier(Modifier::SLOW_BLINK))
+            let color = if field_valid(field) { Color::Yellow } else { Color::Red };
+            Span::styled("_", Style::default().fg(color).add_modifier(Modifier::SLOW_BLINK))
         } else {
             Span::raw("")
         }
+    };
+
+    let footer = if input.is_valid() {
+        Line::from(Span::styled(
+            "Tab/↑↓: Switch field  Enter: Create  Esc: Cancel",
+            Style::default().fg(Color::DarkGray),
+        ))
+    } else {
+        let invalid = input.invalid_field_names();
+        let fix_text = format!("Fix: {}  Tab/↑↓: Switch  Esc: Cancel", invalid.join(", "));
+        Line::from(Span::styled(fix_text, Style::default().fg(Color::Red)))
     };
 
     let lines = vec![
@@ -295,29 +346,34 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(vec![
             Span::styled("Local Port:  ", field_style(ForwardField::LocalPort)),
-            Span::raw(&input.local_port),
+            Span::styled(input.local_port.as_str(), field_style(ForwardField::LocalPort)),
             cursor(ForwardField::LocalPort),
         ]),
         Line::from(vec![
             Span::styled("Remote Host: ", field_style(ForwardField::RemoteHost)),
-            Span::raw(&input.remote_host),
+            Span::styled(input.remote_host.as_str(), field_style(ForwardField::RemoteHost)),
             cursor(ForwardField::RemoteHost),
         ]),
         Line::from(vec![
             Span::styled("Remote Port: ", field_style(ForwardField::RemotePort)),
-            Span::raw(&input.remote_port),
+            Span::styled(input.remote_port.as_str(), field_style(ForwardField::RemotePort)),
             cursor(ForwardField::RemotePort),
         ]),
-        Line::from(vec![
-            Span::styled("SSH Host:    ", field_style(ForwardField::SshHost)),
-            Span::raw(&input.ssh_host),
-            cursor(ForwardField::SshHost),
-        ]),
+        Line::from(if is_remote {
+            vec![
+                Span::styled("SSH Host:    ", field_style(ForwardField::SshHost)),
+                Span::styled(input.ssh_host.as_str(), field_style(ForwardField::SshHost)),
+                Span::styled(" (locked)", Style::default().fg(Color::DarkGray)),
+            ]
+        } else {
+            vec![
+                Span::styled("SSH Host:    ", field_style(ForwardField::SshHost)),
+                Span::styled(input.ssh_host.as_str(), field_style(ForwardField::SshHost)),
+                cursor(ForwardField::SshHost),
+            ]
+        }),
         Line::from(""),
-        Line::from(Span::styled(
-            "Tab/↑↓: Switch field  Enter: Create  Esc: Cancel",
-            Style::default().fg(Color::DarkGray),
-        )),
+        footer,
     ];
 
     let paragraph = Paragraph::new(lines).block(

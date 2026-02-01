@@ -18,6 +18,8 @@ pub struct GeneralConfig {
     pub refresh_interval: u32,
     #[serde(default = "default_filter")]
     pub default_filter: String,
+    #[serde(default)]
+    pub remote_host: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -40,6 +42,7 @@ impl Default for GeneralConfig {
             auto_refresh: false,
             refresh_interval: default_refresh_interval(),
             default_filter: default_filter(),
+            remote_host: None,
         }
     }
 }
@@ -77,6 +80,7 @@ mod tests {
         assert!(!config.general.auto_refresh);
         assert_eq!(config.general.refresh_interval, 5);
         assert_eq!(config.general.default_filter, "all");
+        assert!(config.general.remote_host.is_none());
         assert!(!config.ui.mouse_enabled);
     }
 
@@ -107,6 +111,17 @@ auto_refresh = true
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.general.auto_refresh);
         assert_eq!(config.general.refresh_interval, 5);
+        assert!(config.general.remote_host.is_none());
         assert!(!config.ui.mouse_enabled);
+    }
+
+    #[test]
+    fn test_parse_config_with_remote_host() {
+        let toml = r#"
+[general]
+remote_host = "user@server"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.general.remote_host, Some("user@server".to_string()));
     }
 }

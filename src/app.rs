@@ -68,12 +68,73 @@ impl ForwardInput {
         }
     }
 
+    pub fn is_local_port_valid(&self) -> bool {
+        !self.local_port.is_empty() && self.local_port.parse::<u16>().is_ok()
+    }
+
+    pub fn is_remote_host_valid(&self) -> bool {
+        !self.remote_host.trim().is_empty()
+    }
+
+    pub fn is_remote_port_valid(&self) -> bool {
+        !self.remote_port.is_empty() && self.remote_port.parse::<u16>().is_ok()
+    }
+
+    pub fn is_ssh_host_valid(&self) -> bool {
+        !self.ssh_host.trim().is_empty()
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.is_local_port_valid()
+            && self.is_remote_host_valid()
+            && self.is_remote_port_valid()
+            && self.is_ssh_host_valid()
+    }
+
+    pub fn invalid_field_names(&self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if !self.is_local_port_valid() {
+            names.push("Local Port");
+        }
+        if !self.is_remote_host_valid() {
+            names.push("Remote Host");
+        }
+        if !self.is_remote_port_valid() {
+            names.push("Remote Port");
+        }
+        if !self.is_ssh_host_valid() {
+            names.push("SSH Host");
+        }
+        names
+    }
+
+    pub fn from_entry(entry: &PortEntry) -> Self {
+        let has_ssh_host = entry.ssh_host.as_ref().is_some_and(|h| !h.is_empty());
+        Self {
+            local_port: entry.local_port.to_string(),
+            remote_host: "localhost".to_string(),
+            remote_port: entry.local_port.to_string(),
+            ssh_host: entry.ssh_host.clone().unwrap_or_default(),
+            active_field: if has_ssh_host { ForwardField::LocalPort } else { ForwardField::SshHost },
+        }
+    }
+
+    pub fn for_remote_entry(entry: &PortEntry, remote_host: &str) -> Self {
+        Self {
+            local_port: entry.local_port.to_string(),
+            remote_host: "localhost".to_string(),
+            remote_port: entry.local_port.to_string(),
+            ssh_host: remote_host.to_string(),
+            active_field: ForwardField::LocalPort,
+        }
+    }
+
     pub fn to_spec(&self) -> Option<(String, String)> {
-        let local_port: u16 = self.local_port.parse().ok()?;
-        let remote_port: u16 = self.remote_port.parse().ok()?;
-        if self.remote_host.is_empty() || self.ssh_host.is_empty() {
+        if !self.is_valid() {
             return None;
         }
+        let local_port: u16 = self.local_port.parse().ok()?;
+        let remote_port: u16 = self.remote_port.parse().ok()?;
         let spec = format!("{}:{}:{}", local_port, self.remote_host, remote_port);
         Some((spec, self.ssh_host.clone()))
     }
@@ -103,6 +164,7 @@ pub struct App {
     pub status_message: Option<(String, u32)>, // (message, ticks_remaining)
     pub presets: Vec<Preset>,
     pub preset_selected: usize,
+    pub remote_host: Option<String>,
 }
 
 impl App {
@@ -123,7 +185,12 @@ impl App {
             status_message: None,
             presets: Vec::new(),
             preset_selected: 0,
+            remote_host: None,
         }
+    }
+
+    pub fn is_remote(&self) -> bool {
+        self.remote_host.is_some()
     }
 
     pub fn preset_next(&mut self) {
@@ -286,5 +353,181 @@ mod tests {
         app.auto_refresh = false;
         app.tick_count = 10;
         assert!(!app.should_refresh());
+    }
+
+    #[test]
+    fn test_forward_input_empty_is_invalid() {
+        let input = ForwardInput::new();
+        assert!(!input.is_valid());
+        assert!(!input.is_local_port_valid());
+        assert!(!input.is_remote_host_valid());
+        assert!(!input.is_remote_port_valid());
+        assert!(!input.is_ssh_host_valid());
+    }
+
+    #[test]
+    fn test_forward_input_valid() {
+        let input = ForwardInput {
+            local_port: "8080".to_string(),
+            remote_host: "localhost".to_string(),
+            remote_port: "80".to_string(),
+            ssh_host: "myserver".to_string(),
+            active_field: ForwardField::LocalPort,
+        };
+        assert!(input.is_valid());
+        assert!(input.is_local_port_valid());
+        assert!(input.is_remote_host_valid());
+        assert!(input.is_remote_port_valid());
+        assert!(input.is_ssh_host_valid());
+    }
+
+    #[test]
+    fn test_forward_input_bad_port() {
+        let input = ForwardInput {
+            local_port: "99999".to_string(),
+            remote_host: "localhost".to_string(),
+            remote_port: "80".to_string(),
+            ssh_host: "myserver".to_string(),
+            active_field: ForwardField::LocalPort,
+        };
+        assert!(!input.is_local_port_valid());
+        assert!(!input.is_valid());
+    }
+
+    #[test]
+    fn test_forward_input_non_numeric_port() {
+        let input = ForwardInput {
+            local_port: "abc".to_string(),
+            remote_host: "localhost".to_string(),
+            remote_port: "80".to_string(),
+            ssh_host: "myserver".to_string(),
+            active_field: ForwardField::LocalPort,
+        };
+        assert!(!input.is_local_port_valid());
+        assert!(!input.is_valid());
+    }
+
+    #[test]
+    fn test_forward_input_whitespace_host() {
+        let input = ForwardInput {
+            local_port: "8080".to_string(),
+            remote_host: "   ".to_string(),
+            remote_port: "80".to_string(),
+            ssh_host: "myserver".to_string(),
+            active_field: ForwardField::LocalPort,
+        };
+        assert!(!input.is_remote_host_valid());
+        assert!(!input.is_valid());
+    }
+
+    #[test]
+    fn test_forward_input_from_entry() {
+        let entry = PortEntry {
+            source: PortSource::Local,
+            local_port: 3000,
+            remote_host: None,
+            remote_port: None,
+            process_name: "node".to_string(),
+            pid: Some(1234),
+            container_id: None,
+            container_name: None,
+            ssh_host: None,
+            is_open: true,
+        };
+        let input = ForwardInput::from_entry(&entry);
+        assert_eq!(input.local_port, "3000");
+        assert_eq!(input.remote_host, "localhost");
+        assert_eq!(input.remote_port, "3000");
+        assert_eq!(input.ssh_host, "");
+        assert_eq!(input.active_field, ForwardField::SshHost);
+    }
+
+    #[test]
+    fn test_forward_input_from_entry_with_ssh_host() {
+        let entry = PortEntry {
+            source: PortSource::Ssh,
+            local_port: 9000,
+            remote_host: Some("localhost".to_string()),
+            remote_port: Some(80),
+            process_name: "ssh".to_string(),
+            pid: Some(4567),
+            container_id: None,
+            container_name: None,
+            ssh_host: Some("myserver".to_string()),
+            is_open: true,
+        };
+        let input = ForwardInput::from_entry(&entry);
+        assert_eq!(input.local_port, "9000");
+        assert_eq!(input.remote_host, "localhost");
+        assert_eq!(input.remote_port, "9000");
+        assert_eq!(input.ssh_host, "myserver");
+        assert_eq!(input.active_field, ForwardField::LocalPort);
+    }
+
+    #[test]
+    fn test_forward_input_to_spec() {
+        let input = ForwardInput {
+            local_port: "8080".to_string(),
+            remote_host: "localhost".to_string(),
+            remote_port: "80".to_string(),
+            ssh_host: "myserver".to_string(),
+            active_field: ForwardField::LocalPort,
+        };
+        let (spec, host) = input.to_spec().unwrap();
+        assert_eq!(spec, "8080:localhost:80");
+        assert_eq!(host, "myserver");
+    }
+
+    #[test]
+    fn test_forward_input_to_spec_invalid() {
+        let input = ForwardInput::new();
+        assert!(input.to_spec().is_none());
+    }
+
+    #[test]
+    fn test_is_remote() {
+        let mut app = App::new();
+        assert!(!app.is_remote());
+        app.remote_host = Some("user@server".to_string());
+        assert!(app.is_remote());
+    }
+
+    #[test]
+    fn test_forward_input_for_remote_entry() {
+        let entry = PortEntry {
+            source: PortSource::Local,
+            local_port: 18080,
+            remote_host: None,
+            remote_port: None,
+            process_name: "python".to_string(),
+            pid: Some(5555),
+            container_id: None,
+            container_name: None,
+            ssh_host: None,
+            is_open: true,
+        };
+        let input = ForwardInput::for_remote_entry(&entry, "user@server");
+        assert_eq!(input.local_port, "18080");
+        assert_eq!(input.remote_host, "localhost");
+        assert_eq!(input.remote_port, "18080");
+        assert_eq!(input.ssh_host, "user@server");
+        assert_eq!(input.active_field, ForwardField::LocalPort);
+    }
+
+    #[test]
+    fn test_forward_input_invalid_field_names() {
+        let input = ForwardInput::new();
+        let names = input.invalid_field_names();
+        assert_eq!(names.len(), 4);
+
+        let input = ForwardInput {
+            local_port: "8080".to_string(),
+            remote_host: "localhost".to_string(),
+            remote_port: "80".to_string(),
+            ssh_host: String::new(),
+            active_field: ForwardField::LocalPort,
+        };
+        let names = input.invalid_field_names();
+        assert_eq!(names, vec!["SSH Host"]);
     }
 }

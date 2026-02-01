@@ -146,13 +146,14 @@ async fn run_scenario(name: Option<String>, list: bool) -> Result<()> {
             pid: None,
             container_id: None,
             container_name: None,
+            ssh_host: None,
             is_open: e.should_listen,
         }
     }).collect();
     entries.sort_by_key(|e| (!e.is_open, e.local_port));
 
     // Launch TUI with the scenario entries
-    let result = crate::run_tui_with_entries(Some(entries)).await;
+    let result = crate::run_tui_with_entries(Some(entries), None).await;
 
     // Abort listeners on TUI exit
     for handle in handles {

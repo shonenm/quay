@@ -1,4 +1,4 @@
-use crate::app::ForwardInput;
+use crate::app::{ForwardField, ForwardInput};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use std::time::Duration;
 
@@ -41,6 +41,7 @@ pub fn handle_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('r') => Some(Action::Refresh),
         KeyCode::Char('a') => Some(Action::ToggleAutoRefresh),
         KeyCode::Char('f') => Some(Action::StartForward),
+        KeyCode::Char('F') => Some(Action::QuickForward),
         KeyCode::Char('p') => Some(Action::ShowPresets),
         KeyCode::Char('0') => Some(Action::FilterAll),
         KeyCode::Char('1') => Some(Action::FilterLocal),
@@ -76,23 +77,44 @@ pub fn handle_search_key(key: KeyEvent, query: &mut String) -> Option<Action> {
     }
 }
 
-pub fn handle_forward_key(key: KeyEvent, input: &mut ForwardInput) -> Option<Action> {
+pub fn handle_forward_key(key: KeyEvent, input: &mut ForwardInput, remote_mode: bool) -> Option<Action> {
     match key.code {
         KeyCode::Esc => Some(Action::ClosePopup),
-        KeyCode::Enter => Some(Action::SubmitForward),
+        KeyCode::Enter => {
+            if input.is_valid() {
+                Some(Action::SubmitForward)
+            } else {
+                None
+            }
+        }
         KeyCode::Tab | KeyCode::Down => {
             input.active_field = input.active_field.next();
+            // In remote mode, skip the SshHost field (it's locked)
+            if remote_mode && input.active_field == ForwardField::SshHost {
+                input.active_field = input.active_field.next();
+            }
             None
         }
         KeyCode::BackTab | KeyCode::Up => {
             input.active_field = input.active_field.prev();
+            if remote_mode && input.active_field == ForwardField::SshHost {
+                input.active_field = input.active_field.prev();
+            }
             None
         }
         KeyCode::Backspace => {
+            // In remote mode, don't allow editing SSH Host
+            if remote_mode && input.active_field == ForwardField::SshHost {
+                return None;
+            }
             input.active_value().pop();
             None
         }
         KeyCode::Char(c) => {
+            // In remote mode, don't allow editing SSH Host
+            if remote_mode && input.active_field == ForwardField::SshHost {
+                return None;
+            }
             input.active_value().push(c);
             None
         }
@@ -151,4 +173,5 @@ pub enum Action {
     SubmitForward,
     ShowPresets,
     LaunchPreset,
+    QuickForward,
 }

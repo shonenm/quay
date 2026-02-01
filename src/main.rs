@@ -7,7 +7,7 @@ mod preset;
 mod ui;
 
 use anyhow::Result;
-use app::{App, Filter, InputMode, Popup};
+use app::{App, Filter, ForwardInput, InputMode, Popup};
 use clap::{Parser, Subcommand};
 use port::PortEntry;
 use crossterm::{
@@ -25,6 +25,10 @@ use std::time::Duration;
 #[command(about = "A TUI port manager for local processes, SSH forwards, and Docker containers")]
 #[command(version)]
 struct Cli {
+    /// Remote host (e.g., user@server) to scan ports via SSH
+    #[arg(short, long)]
+    remote: Option<String>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -75,23 +79,27 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Resolve remote_host: CLI flag takes precedence over config
+    let config = config::Config::load();
+    let remote_host = cli.remote.or(config.general.remote_host);
+
     match cli.command {
         Some(Commands::List { json, local, ssh, docker }) => {
-            run_list(json, local, ssh, docker).await
+            run_list(json, local, ssh, docker, remote_host.as_deref()).await
         }
         Some(Commands::Forward { spec, host, remote }) => {
             run_forward(&spec, &host, remote).await
         }
         Some(Commands::Kill { port, pid }) => {
-            run_kill(port, pid).await
+            run_kill(port, pid, remote_host.as_deref()).await
         }
         Some(Commands::Dev { command }) => dev::run_dev(command).await,
-        None => run_tui().await,
+        None => run_tui(remote_host).await,
     }
 }
 
-async fn run_list(json: bool, local: bool, ssh: bool, docker: bool) -> Result<()> {
-    let entries = port::collect_all().await?;
+async fn run_list(json: bool, local: bool, ssh: bool, docker: bool, remote_host: Option<&str>) -> Result<()> {
+    let entries = port::collect_all(remote_host).await?;
 
     let filtered: Vec<_> = entries
         .into_iter()
@@ -122,6 +130,7 @@ async fn run_list(json: bool, local: bool, ssh: bool, docker: bool) -> Result<()
                     "pid": e.pid,
                     "container_id": e.container_id,
                     "container_name": e.container_name,
+                    "ssh_host": e.ssh_host,
                 })
             })
             .collect();
@@ -161,24 +170,24 @@ async fn run_forward(spec: &str, host: &str, remote: bool) -> Result<()> {
     }
 }
 
-async fn run_kill(port: u16, pid: Option<u32>) -> Result<()> {
+async fn run_kill(port: u16, pid: Option<u32>, remote_host: Option<&str>) -> Result<()> {
     if let Some(pid) = pid {
         println!("Killing process with PID: {}...", pid);
-        port::kill_by_pid(pid)?;
+        port::kill_by_pid(pid, remote_host)?;
         println!("Done.");
     } else {
         println!("Killing process on port: {}...", port);
-        port::kill_by_port(port).await?;
+        port::kill_by_port(port, remote_host).await?;
         println!("Done.");
     }
     Ok(())
 }
 
-async fn run_tui() -> Result<()> {
-    run_tui_with_entries(None).await
+async fn run_tui(remote_host: Option<String>) -> Result<()> {
+    run_tui_with_entries(None, remote_host).await
 }
 
-pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Result<()> {
+pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>, remote_host: Option<String>) -> Result<()> {
     let mock_mode = initial.is_some();
 
     // Load config first (needed for terminal setup)
@@ -198,6 +207,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Res
 
     // Create app state
     let mut app = App::new();
+    app.remote_host = remote_host;
 
     // Apply config settings
     if !mock_mode {
@@ -220,7 +230,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Res
         app.set_entries(entries);
         app.set_status("[mock] Loaded mock data");
     } else {
-        match port::collect_all().await {
+        match port::collect_all(app.remote_host.as_deref()).await {
             Ok(entries) => app.set_entries(entries),
             Err(e) => app.set_status(&format!("Load failed: {}", e)),
         }
@@ -237,7 +247,8 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Res
             AppEvent::Key(key) => {
                 // Handle Forward popup specially (needs input handling)
                 if app.popup == Popup::Forward {
-                    if let Some(action) = handle_forward_key(key, &mut app.forward_input) {
+                    let remote_mode = app.is_remote();
+                    if let Some(action) = handle_forward_key(key, &mut app.forward_input, remote_mode) {
                         match action {
                             Action::ClosePopup => {
                                 app.popup = Popup::None;
@@ -257,6 +268,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Res
                                             pid: Some(99999),
                                             container_id: None,
                                             container_name: None,
+                                            ssh_host: Some(app.forward_input.ssh_host.clone()),
                                             is_open: true,
                                         };
                                         let mut entries = app.entries.clone();
@@ -272,7 +284,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Res
                                         match port::ssh::create_forward(&spec, &host, false) {
                                             Ok(pid) => {
                                                 app.set_status(&format!("Forward created (PID: {})", pid));
-                                                if let Ok(entries) = port::collect_all().await {
+                                                if let Ok(entries) = port::collect_all(app.remote_host.as_deref()).await {
                                                     app.set_entries(entries);
                                                 }
                                             }
@@ -310,7 +322,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Res
                                         match port::ssh::create_forward(&spec, &host, false) {
                                             Ok(pid) => {
                                                 app.set_status(&format!("Forward created (PID: {})", pid));
-                                                if let Ok(entries) = port::collect_all().await {
+                                                if let Ok(entries) = port::collect_all(app.remote_host.as_deref()).await {
                                                     app.set_entries(entries);
                                                 }
                                             }
@@ -369,7 +381,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Res
                             if mock_mode {
                                 // no-op in mock mode
                             } else {
-                                match port::collect_all().await {
+                                match port::collect_all(app.remote_host.as_deref()).await {
                                     Ok(entries) => {
                                         app.set_entries(entries);
                                         app.set_status("Refreshed");
@@ -391,6 +403,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Res
                         Action::Kill => {
                             if let Some(entry) = app.selected_entry() {
                                 let port = entry.local_port;
+                                let is_ssh = entry.source == port::PortSource::Ssh;
                                 if mock_mode {
                                     // Remove entry from list in mock mode
                                     let entries: Vec<_> = app.entries.iter()
@@ -400,10 +413,12 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Res
                                     app.set_entries(entries);
                                     app.set_status(&format!("[mock] Removed port {}", port));
                                 } else {
-                                    match port::kill_by_port(port).await {
+                                    // SSH tunnels are always killed locally
+                                    let kill_host = if is_ssh { None } else { app.remote_host.as_deref() };
+                                    match port::kill_by_port(port, kill_host).await {
                                         Ok(_) => {
                                             app.set_status(&format!("Killed process on port {}", port));
-                                            if let Ok(entries) = port::collect_all().await {
+                                            if let Ok(entries) = port::collect_all(app.remote_host.as_deref()).await {
                                                 app.set_entries(entries);
                                             }
                                         }
@@ -421,6 +436,11 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Res
                             app.popup = Popup::Help;
                         }
                         Action::StartForward => {
+                            app.forward_input = match (app.selected_entry(), app.remote_host.as_deref()) {
+                                (Some(entry), Some(host)) => ForwardInput::for_remote_entry(entry, host),
+                                (Some(entry), None) => ForwardInput::from_entry(entry),
+                                _ => ForwardInput::new(),
+                            };
                             app.popup = Popup::Forward;
                         }
                         Action::ShowPresets => {
@@ -429,6 +449,47 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Res
                         }
                         Action::ClosePopup => {
                             app.popup = Popup::None;
+                        }
+                        Action::QuickForward => {
+                            if let Some(entry) = app.selected_entry() {
+                                let port = entry.local_port;
+                                if let Some(host) = app.remote_host.clone() {
+                                    let spec = format!("{}:localhost:{}", port, port);
+                                    if mock_mode {
+                                        let mock_entry = PortEntry {
+                                            source: port::PortSource::Ssh,
+                                            local_port: port,
+                                            remote_host: Some("localhost".to_string()),
+                                            remote_port: Some(port),
+                                            process_name: "ssh".to_string(),
+                                            pid: Some(99999),
+                                            container_id: None,
+                                            container_name: None,
+                                            ssh_host: Some(host.clone()),
+                                            is_open: true,
+                                        };
+                                        let mut entries = app.entries.clone();
+                                        entries.push(mock_entry);
+                                        entries.sort_by_key(|e| (!e.is_open, e.local_port));
+                                        app.set_entries(entries);
+                                        app.set_status(&format!("[mock] Forward :{} -> {}:{}", port, host, port));
+                                    } else {
+                                        match port::ssh::create_forward(&spec, &host, false) {
+                                            Ok(pid) => {
+                                                app.set_status(&format!("Forward :{} -> {}:{} (PID: {})", port, host, port, pid));
+                                                if let Ok(entries) = port::collect_all(app.remote_host.as_deref()).await {
+                                                    app.set_entries(entries);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                app.set_status(&format!("Forward failed: {}", e));
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    app.set_status("Quick Forward requires --remote mode");
+                                }
+                            }
                         }
                         Action::SubmitForward | Action::LaunchPreset | Action::SelectRow(_) => {
                             // Handled elsewhere (popup handlers or mouse handler)
@@ -461,7 +522,7 @@ pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Res
             AppEvent::Tick => {
                 app.tick();
                 if !mock_mode && app.should_refresh() {
-                    match port::collect_all().await {
+                    match port::collect_all(app.remote_host.as_deref()).await {
                         Ok(entries) => app.set_entries(entries),
                         Err(e) => app.set_status(&format!("Auto-refresh failed: {}", e)),
                     }
@@ -493,6 +554,21 @@ mod tests {
     fn test_cli_parse_default() {
         let cli = Cli::try_parse_from(["quay"]).unwrap();
         assert!(cli.command.is_none());
+        assert!(cli.remote.is_none());
+    }
+
+    #[test]
+    fn test_cli_parse_remote() {
+        let cli = Cli::try_parse_from(["quay", "--remote", "user@server"]).unwrap();
+        assert_eq!(cli.remote, Some("user@server".to_string()));
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_parse_remote_with_list() {
+        let cli = Cli::try_parse_from(["quay", "--remote", "server", "list"]).unwrap();
+        assert_eq!(cli.remote, Some("server".to_string()));
+        assert!(matches!(cli.command, Some(Commands::List { .. })));
     }
 
     #[test]

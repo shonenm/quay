@@ -13,6 +13,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             pid: Some(1234),
             container_id: None,
             container_name: None,
+            ssh_host: None,
             is_open: true,
         },
         PortEntry {
@@ -24,6 +25,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             pid: Some(2345),
             container_id: None,
             container_name: None,
+            ssh_host: None,
             is_open: true,
         },
         PortEntry {
@@ -35,6 +37,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             pid: Some(3456),
             container_id: None,
             container_name: None,
+            ssh_host: None,
             is_open: false,
         },
         // SSH x 2
@@ -47,6 +50,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             pid: Some(4567),
             container_id: None,
             container_name: None,
+            ssh_host: Some("bastion.example.com".to_string()),
             is_open: true,
         },
         PortEntry {
@@ -58,6 +62,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             pid: Some(5678),
             container_id: None,
             container_name: None,
+            ssh_host: Some("gateway.internal".to_string()),
             is_open: false,
         },
         // Docker x 3
@@ -70,6 +75,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             pid: None,
             container_id: Some("abc123def456".to_string()),
             container_name: Some("postgres".to_string()),
+            ssh_host: None,
             is_open: true,
         },
         PortEntry {
@@ -81,6 +87,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             pid: None,
             container_id: Some("def456abc789".to_string()),
             container_name: Some("redis".to_string()),
+            ssh_host: None,
             is_open: true,
         },
         PortEntry {
@@ -92,6 +99,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             pid: None,
             container_id: Some("789abc123def".to_string()),
             container_name: Some("mongo".to_string()),
+            ssh_host: None,
             is_open: false,
         },
     ];
@@ -103,7 +111,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
 
 pub async fn run() -> Result<()> {
     let entries = generate_mock_entries();
-    crate::run_tui_with_entries(Some(entries)).await
+    crate::run_tui_with_entries(Some(entries), None).await
 }
 
 #[cfg(test)]
