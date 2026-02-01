@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod dev;
 mod event;
 mod port;
 mod preset;
@@ -8,6 +9,7 @@ mod ui;
 use anyhow::Result;
 use app::{App, Filter, InputMode, Popup};
 use clap::{Parser, Subcommand};
+use port::PortEntry;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -62,6 +64,11 @@ enum Commands {
         #[arg(long)]
         pid: Option<u32>,
     },
+    /// Developer tools for testing and debugging
+    Dev {
+        #[command(subcommand)]
+        command: dev::DevCommands,
+    },
 }
 
 #[tokio::main]
@@ -78,6 +85,7 @@ async fn main() -> Result<()> {
         Some(Commands::Kill { port, pid }) => {
             run_kill(port, pid).await
         }
+        Some(Commands::Dev { command }) => dev::run_dev(command).await,
         None => run_tui().await,
     }
 }
@@ -107,6 +115,7 @@ async fn run_list(json: bool, local: bool, ssh: bool, docker: bool) -> Result<()
                 serde_json::json!({
                     "source": format!("{:?}", e.source),
                     "local_port": e.local_port,
+                    "is_open": e.is_open,
                     "remote_host": e.remote_host,
                     "remote_port": e.remote_port,
                     "process_name": e.process_name,
@@ -118,12 +127,14 @@ async fn run_list(json: bool, local: bool, ssh: bool, docker: bool) -> Result<()
             .collect();
         println!("{}", serde_json::to_string_pretty(&json_entries)?);
     } else {
-        println!("{:<8} {:<8} {:<20} PROCESS", "TYPE", "LOCAL", "REMOTE");
-        println!("{}", "-".repeat(60));
+        println!("{:<8} {:<6} {:<8} {:<20} PROCESS", "TYPE", "OPEN", "LOCAL", "REMOTE");
+        println!("{}", "-".repeat(66));
         for entry in filtered {
+            let open_indicator = if entry.is_open { "●" } else { "○" };
             println!(
-                "{:<8} :{:<7} {:<20} {}",
+                "{:<8} {:<6} :{:<7} {:<20} {}",
                 entry.source,
+                open_indicator,
                 entry.local_port,
                 entry.remote_display(),
                 entry.process_display()
@@ -164,6 +175,12 @@ async fn run_kill(port: u16, pid: Option<u32>) -> Result<()> {
 }
 
 async fn run_tui() -> Result<()> {
+    run_tui_with_entries(None).await
+}
+
+pub(crate) async fn run_tui_with_entries(initial: Option<Vec<PortEntry>>) -> Result<()> {
+    let mock_mode = initial.is_some();
+
     // Load config first (needed for terminal setup)
     let config = config::Config::load();
     let mouse_enabled = config.ui.mouse_enabled;
@@ -183,7 +200,9 @@ async fn run_tui() -> Result<()> {
     let mut app = App::new();
 
     // Apply config settings
-    app.auto_refresh = config.general.auto_refresh;
+    if !mock_mode {
+        app.auto_refresh = config.general.auto_refresh;
+    }
     app.refresh_ticks = config.general.refresh_interval.saturating_mul(4).max(1);
     match config.general.default_filter.as_str() {
         "local" => app.filter = Filter::Local,
@@ -197,9 +216,14 @@ async fn run_tui() -> Result<()> {
     app.presets = presets.preset;
 
     // Load initial data
-    match port::collect_all().await {
-        Ok(entries) => app.set_entries(entries),
-        Err(e) => app.set_status(&format!("Load failed: {}", e)),
+    if let Some(entries) = initial {
+        app.set_entries(entries);
+        app.set_status("[mock] Loaded mock data");
+    } else {
+        match port::collect_all().await {
+            Ok(entries) => app.set_entries(entries),
+            Err(e) => app.set_status(&format!("Load failed: {}", e)),
+        }
     }
 
     // Event handler
@@ -220,20 +244,45 @@ async fn run_tui() -> Result<()> {
                                 app.reset_forward_input();
                             }
                             Action::SubmitForward => {
-                                if let Some((spec, host)) = app.forward_input.to_spec() {
-                                    match port::ssh::create_forward(&spec, &host, false) {
-                                        Ok(pid) => {
-                                            app.set_status(&format!("Forward created (PID: {})", pid));
-                                            if let Ok(entries) = port::collect_all().await {
-                                                app.set_entries(entries);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            app.set_status(&format!("Forward failed: {}", e));
-                                        }
+                                if mock_mode {
+                                    // In mock mode, add a fake SSH forward entry
+                                    if let Some((_, _)) = app.forward_input.to_spec() {
+                                        let local_port: u16 = app.forward_input.local_port.parse().unwrap_or(0);
+                                        let mock_entry = PortEntry {
+                                            source: port::PortSource::Ssh,
+                                            local_port,
+                                            remote_host: Some(app.forward_input.remote_host.clone()),
+                                            remote_port: app.forward_input.remote_port.parse().ok(),
+                                            process_name: "ssh".to_string(),
+                                            pid: Some(99999),
+                                            container_id: None,
+                                            container_name: None,
+                                            is_open: true,
+                                        };
+                                        let mut entries = app.entries.clone();
+                                        entries.push(mock_entry);
+                                        entries.sort_by_key(|e| (!e.is_open, e.local_port));
+                                        app.set_entries(entries);
+                                        app.set_status("[mock] Forward created");
+                                    } else {
+                                        app.set_status("Invalid forward specification");
                                     }
                                 } else {
-                                    app.set_status("Invalid forward specification");
+                                    if let Some((spec, host)) = app.forward_input.to_spec() {
+                                        match port::ssh::create_forward(&spec, &host, false) {
+                                            Ok(pid) => {
+                                                app.set_status(&format!("Forward created (PID: {})", pid));
+                                                if let Ok(entries) = port::collect_all().await {
+                                                    app.set_entries(entries);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                app.set_status(&format!("Forward failed: {}", e));
+                                            }
+                                        }
+                                    } else {
+                                        app.set_status("Invalid forward specification");
+                                    }
                                 }
                                 app.popup = Popup::None;
                                 app.reset_forward_input();
@@ -254,20 +303,24 @@ async fn run_tui() -> Result<()> {
                             Action::Up => app.preset_previous(),
                             Action::Down => app.preset_next(),
                             Action::LaunchPreset => {
-                                if let Some(preset) = app.selected_preset() {
-                                    let spec = format!("{}:{}:{}", preset.local_port, preset.remote_host, preset.remote_port);
-                                    let host = preset.ssh_host.clone();
-                                    match port::ssh::create_forward(&spec, &host, false) {
-                                        Ok(pid) => {
-                                            app.set_status(&format!("Forward created (PID: {})", pid));
-                                            if let Ok(entries) = port::collect_all().await {
-                                                app.set_entries(entries);
+                                if !mock_mode {
+                                    if let Some(preset) = app.selected_preset() {
+                                        let spec = format!("{}:{}:{}", preset.local_port, preset.remote_host, preset.remote_port);
+                                        let host = preset.ssh_host.clone();
+                                        match port::ssh::create_forward(&spec, &host, false) {
+                                            Ok(pid) => {
+                                                app.set_status(&format!("Forward created (PID: {})", pid));
+                                                if let Ok(entries) = port::collect_all().await {
+                                                    app.set_entries(entries);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                app.set_status(&format!("Forward failed: {}", e));
                                             }
                                         }
-                                        Err(e) => {
-                                            app.set_status(&format!("Forward failed: {}", e));
-                                        }
                                     }
+                                } else {
+                                    app.set_status("[mock] Forward created");
                                 }
                                 app.popup = Popup::None;
                             }
@@ -313,34 +366,50 @@ async fn run_tui() -> Result<()> {
                         Action::FilterSsh => app.set_filter(Filter::Ssh),
                         Action::FilterDocker => app.set_filter(Filter::Docker),
                         Action::Refresh => {
-                            match port::collect_all().await {
-                                Ok(entries) => {
-                                    app.set_entries(entries);
-                                    app.set_status("Refreshed");
+                            if mock_mode {
+                                // no-op in mock mode
+                            } else {
+                                match port::collect_all().await {
+                                    Ok(entries) => {
+                                        app.set_entries(entries);
+                                        app.set_status("Refreshed");
+                                    }
+                                    Err(e) => app.set_status(&format!("Refresh failed: {}", e)),
                                 }
-                                Err(e) => app.set_status(&format!("Refresh failed: {}", e)),
                             }
                         }
                         Action::ToggleAutoRefresh => {
-                            app.auto_refresh = !app.auto_refresh;
-                            if app.auto_refresh {
-                                app.set_status("Auto-refresh ON");
-                            } else {
-                                app.set_status("Auto-refresh OFF");
+                            if !mock_mode {
+                                app.auto_refresh = !app.auto_refresh;
+                                if app.auto_refresh {
+                                    app.set_status("Auto-refresh ON");
+                                } else {
+                                    app.set_status("Auto-refresh OFF");
+                                }
                             }
                         }
                         Action::Kill => {
                             if let Some(entry) = app.selected_entry() {
                                 let port = entry.local_port;
-                                match port::kill_by_port(port).await {
-                                    Ok(_) => {
-                                        app.set_status(&format!("Killed process on port {}", port));
-                                        if let Ok(entries) = port::collect_all().await {
-                                            app.set_entries(entries);
+                                if mock_mode {
+                                    // Remove entry from list in mock mode
+                                    let entries: Vec<_> = app.entries.iter()
+                                        .filter(|e| e.local_port != port)
+                                        .cloned()
+                                        .collect();
+                                    app.set_entries(entries);
+                                    app.set_status(&format!("[mock] Removed port {}", port));
+                                } else {
+                                    match port::kill_by_port(port).await {
+                                        Ok(_) => {
+                                            app.set_status(&format!("Killed process on port {}", port));
+                                            if let Ok(entries) = port::collect_all().await {
+                                                app.set_entries(entries);
+                                            }
                                         }
-                                    }
-                                    Err(e) => {
-                                        app.set_status(&format!("Kill failed: {}", e));
+                                        Err(e) => {
+                                            app.set_status(&format!("Kill failed: {}", e));
+                                        }
                                     }
                                 }
                             }
@@ -391,7 +460,7 @@ async fn run_tui() -> Result<()> {
             }
             AppEvent::Tick => {
                 app.tick();
-                if app.should_refresh() {
+                if !mock_mode && app.should_refresh() {
                     match port::collect_all().await {
                         Ok(entries) => app.set_entries(entries),
                         Err(e) => app.set_status(&format!("Auto-refresh failed: {}", e)),
@@ -442,5 +511,41 @@ mod tests {
     fn test_cli_parse_kill() {
         let cli = Cli::try_parse_from(["quay", "kill", "3000"]).unwrap();
         assert!(matches!(cli.command, Some(Commands::Kill { port: 3000, pid: None })));
+    }
+
+    #[test]
+    fn test_cli_parse_dev_listen() {
+        let cli = Cli::try_parse_from(["quay", "dev", "listen", "3000", "8080"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Dev { .. })));
+    }
+
+    #[test]
+    fn test_cli_parse_dev_listen_http() {
+        let cli = Cli::try_parse_from(["quay", "dev", "listen", "3000", "--http"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Dev { .. })));
+    }
+
+    #[test]
+    fn test_cli_parse_dev_scenario() {
+        let cli = Cli::try_parse_from(["quay", "dev", "scenario", "web"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Dev { .. })));
+    }
+
+    #[test]
+    fn test_cli_parse_dev_scenario_list() {
+        let cli = Cli::try_parse_from(["quay", "dev", "scenario", "--list"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Dev { .. })));
+    }
+
+    #[test]
+    fn test_cli_parse_dev_check() {
+        let cli = Cli::try_parse_from(["quay", "dev", "check", "3000"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Dev { .. })));
+    }
+
+    #[test]
+    fn test_cli_parse_dev_mock() {
+        let cli = Cli::try_parse_from(["quay", "dev", "mock"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Dev { .. })));
     }
 }
