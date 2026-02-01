@@ -34,6 +34,7 @@ pub struct PortEntry {
     pub pid: Option<u32>,
     pub container_id: Option<String>,
     pub container_name: Option<String>,
+    pub ssh_host: Option<String>,
     pub is_open: bool,
 }
 
@@ -64,17 +65,18 @@ impl PortEntry {
     }
 }
 
-async fn collect_entries() -> anyhow::Result<Vec<PortEntry>> {
+async fn collect_entries(remote_host: Option<&str>) -> anyhow::Result<Vec<PortEntry>> {
     let mut entries = Vec::new();
 
-    if let Ok(local) = local::collect().await {
+    if let Ok(local) = local::collect(remote_host).await {
         entries.extend(local);
     }
 
-    if let Ok(docker) = docker::collect().await {
+    if let Ok(docker) = docker::collect(remote_host).await {
         entries.extend(docker);
     }
 
+    // SSH tunnels are always local processes
     if let Ok(ssh) = ssh::collect().await {
         entries.extend(ssh);
     }
@@ -82,17 +84,22 @@ async fn collect_entries() -> anyhow::Result<Vec<PortEntry>> {
     Ok(entries)
 }
 
-async fn probe_open_ports(entries: &mut [PortEntry]) {
-    let unique_ports: Vec<u16> = {
+async fn probe_open_ports(entries: &mut [PortEntry], remote_mode: bool) {
+    // In remote mode, only probe SSH tunnel entries (which are local).
+    // Remote Local/Docker entries already have is_open set from lsof/docker output.
+    let probe_ports: Vec<u16> = {
         let mut seen = HashMap::new();
         for e in entries.iter() {
+            if remote_mode && e.source != PortSource::Ssh {
+                continue;
+            }
             seen.entry(e.local_port).or_insert(());
         }
         seen.into_keys().collect()
     };
 
     let mut handles = Vec::new();
-    for port in unique_ports {
+    for port in probe_ports {
         handles.push(tokio::spawn(async move {
             let addr = format!("127.0.0.1:{}", port);
             let result = tokio::time::timeout(
@@ -118,16 +125,22 @@ async fn probe_open_ports(entries: &mut [PortEntry]) {
     }
 }
 
-pub async fn collect_all() -> anyhow::Result<Vec<PortEntry>> {
-    let mut entries = collect_entries().await?;
-    probe_open_ports(&mut entries).await;
+pub async fn collect_all(remote_host: Option<&str>) -> anyhow::Result<Vec<PortEntry>> {
+    let mut entries = collect_entries(remote_host).await?;
+    probe_open_ports(&mut entries, remote_host.is_some()).await;
     entries.sort_by_key(|e| (!e.is_open, e.local_port));
     Ok(entries)
 }
 
-pub fn kill_by_pid(pid: u32) -> anyhow::Result<()> {
+pub fn kill_by_pid(pid: u32, remote_host: Option<&str>) -> anyhow::Result<()> {
     use std::process::Command;
-    let status = Command::new("kill").arg(pid.to_string()).status()?;
+    let status = match remote_host {
+        Some(host) => Command::new("ssh")
+            .arg(host)
+            .arg(format!("kill {}", pid))
+            .status()?,
+        None => Command::new("kill").arg(pid.to_string()).status()?,
+    };
     if status.success() {
         Ok(())
     } else {
@@ -135,17 +148,25 @@ pub fn kill_by_pid(pid: u32) -> anyhow::Result<()> {
     }
 }
 
-pub async fn kill_by_port(port: u16) -> anyhow::Result<()> {
-    let entries = collect_entries().await?;
+pub async fn kill_by_port(port: u16, remote_host: Option<&str>) -> anyhow::Result<()> {
+    let entries = collect_entries(remote_host).await?;
     let entry = entries
         .iter()
         .find(|e| e.local_port == port)
         .ok_or_else(|| anyhow::anyhow!("No process found on port {}", port))?;
 
     match entry.source {
-        PortSource::Local | PortSource::Ssh => {
+        PortSource::Ssh => {
+            // SSH tunnel processes are always local
             if let Some(pid) = entry.pid {
-                kill_by_pid(pid)
+                kill_by_pid(pid, None)
+            } else {
+                anyhow::bail!("No PID found for port {}", port)
+            }
+        }
+        PortSource::Local => {
+            if let Some(pid) = entry.pid {
+                kill_by_pid(pid, remote_host)
             } else {
                 anyhow::bail!("No PID found for port {}", port)
             }
@@ -153,9 +174,15 @@ pub async fn kill_by_port(port: u16) -> anyhow::Result<()> {
         PortSource::Docker => {
             if let Some(ref container_id) = entry.container_id {
                 use std::process::Command;
-                let status = Command::new("docker")
-                    .args(["stop", container_id])
-                    .status()?;
+                let status = match remote_host {
+                    Some(host) => Command::new("ssh")
+                        .arg(host)
+                        .arg(format!("docker stop {}", container_id))
+                        .status()?,
+                    None => Command::new("docker")
+                        .args(["stop", container_id])
+                        .status()?,
+                };
                 if status.success() {
                     Ok(())
                 } else {

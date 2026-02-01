@@ -2,18 +2,22 @@ use super::{PortEntry, PortSource};
 use anyhow::Result;
 use std::process::Command;
 
-pub async fn collect() -> Result<Vec<PortEntry>> {
-    // Use -F for machine-readable output
-    // Fields: c=command, p=pid, n=name (includes address)
-    let output = Command::new("lsof")
-        .args(["-i", "-P", "-n", "-sTCP:LISTEN", "-Fcpn"])
-        .output()?;
+pub async fn collect(remote_host: Option<&str>) -> Result<Vec<PortEntry>> {
+    let output = match remote_host {
+        Some(host) => Command::new("ssh")
+            .arg(host)
+            .arg("lsof -i -P -n -sTCP:LISTEN -Fcpn")
+            .output()?,
+        None => Command::new("lsof")
+            .args(["-i", "-P", "-n", "-sTCP:LISTEN", "-Fcpn"])
+            .output()?,
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_lsof_fields(&stdout)
+    parse_lsof_fields(&stdout, remote_host.is_some())
 }
 
-fn parse_lsof_fields(output: &str) -> Result<Vec<PortEntry>> {
+fn parse_lsof_fields(output: &str, remote_mode: bool) -> Result<Vec<PortEntry>> {
     let mut entries = Vec::new();
     let mut current_pid: Option<u32> = None;
     let mut current_command: Option<String> = None;
@@ -45,7 +49,9 @@ fn parse_lsof_fields(output: &str) -> Result<Vec<PortEntry>> {
                         pid: current_pid,
                         container_id: None,
                         container_name: None,
-                        is_open: false,
+                        ssh_host: None,
+                        // Remote lsof LISTEN = definitely open on the remote side
+                        is_open: remote_mode,
                     });
                 }
             }
@@ -72,11 +78,12 @@ mod tests {
     #[test]
     fn test_parse_lsof_fields() {
         let output = "p12345\ncnode\nn*:3000\np5678\ncpython\nn127.0.0.1:8080\n";
-        let entries = parse_lsof_fields(output).unwrap();
+        let entries = parse_lsof_fields(output, false).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].local_port, 3000);
         assert_eq!(entries[0].process_name, "node");
         assert_eq!(entries[0].pid, Some(12345));
+        assert!(!entries[0].is_open);
         assert_eq!(entries[1].local_port, 8080);
         assert_eq!(entries[1].process_name, "python");
     }
@@ -84,9 +91,18 @@ mod tests {
     #[test]
     fn test_parse_lsof_ipv6() {
         let output = "p1234\ncnginx\nn[::1]:80\n";
-        let entries = parse_lsof_fields(output).unwrap();
+        let entries = parse_lsof_fields(output, false).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].local_port, 80);
+    }
+
+    #[test]
+    fn test_parse_lsof_remote_mode() {
+        let output = "p12345\ncpython\nn*:18080\n";
+        let entries = parse_lsof_fields(output, true).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].local_port, 18080);
+        assert!(entries[0].is_open);
     }
 
     #[test]

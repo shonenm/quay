@@ -3,13 +3,27 @@ use anyhow::Result;
 use regex::Regex;
 use std::process::Command;
 
-pub async fn collect() -> Result<Vec<PortEntry>> {
-    let output = match Command::new("docker")
-        .args(["ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Ports}}"])
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => return Ok(Vec::new()), // Docker not installed
+pub async fn collect(remote_host: Option<&str>) -> Result<Vec<PortEntry>> {
+    let output = match remote_host {
+        Some(host) => {
+            match Command::new("ssh")
+                .arg(host)
+                .arg(r#"docker ps --format '{{.ID}}\t{{.Names}}\t{{.Ports}}'"#)
+                .output()
+            {
+                Ok(o) => o,
+                Err(_) => return Ok(Vec::new()),
+            }
+        }
+        None => {
+            match Command::new("docker")
+                .args(["ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Ports}}"])
+                .output()
+            {
+                Ok(o) => o,
+                Err(_) => return Ok(Vec::new()), // Docker not installed
+            }
+        }
     };
 
     if !output.status.success() {
@@ -17,10 +31,10 @@ pub async fn collect() -> Result<Vec<PortEntry>> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_docker_ps(&stdout)
+    parse_docker_ps(&stdout, remote_host.is_some())
 }
 
-fn parse_docker_ps(output: &str) -> Result<Vec<PortEntry>> {
+fn parse_docker_ps(output: &str, remote_mode: bool) -> Result<Vec<PortEntry>> {
     let mut entries = Vec::new();
     // Match: 0.0.0.0:5432->5432/tcp or :::5432->5432/tcp (IPv6)
     let port_re = Regex::new(r"(?:[\d.:]+:)?(\d+)->(\d+)/tcp")?;
@@ -53,7 +67,8 @@ fn parse_docker_ps(output: &str) -> Result<Vec<PortEntry>> {
                     pid: None,
                     container_id: Some(container_id.clone()),
                     container_name: Some(container_name.clone()),
-                    is_open: false,
+                    ssh_host: None,
+                    is_open: remote_mode,
                 });
             }
         }
@@ -70,7 +85,7 @@ mod tests {
     fn test_parse_docker_ps() {
         let output = "abc123def456\tpostgres\t0.0.0.0:5432->5432/tcp\n\
                       def456abc123\tredis\t0.0.0.0:6379->6379/tcp";
-        let entries = parse_docker_ps(output).unwrap();
+        let entries = parse_docker_ps(output, false).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].local_port, 5432);
         assert_eq!(entries[0].container_name, Some("postgres".to_string()));
@@ -80,7 +95,7 @@ mod tests {
     #[test]
     fn test_parse_docker_ps_multiple_ports() {
         let output = "abc123\tweb\t0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp";
-        let entries = parse_docker_ps(output).unwrap();
+        let entries = parse_docker_ps(output, false).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].local_port, 80);
         assert_eq!(entries[1].local_port, 443);
@@ -89,7 +104,7 @@ mod tests {
     #[test]
     fn test_parse_docker_ps_ipv6() {
         let output = "abc123\tnginx\t:::8080->80/tcp";
-        let entries = parse_docker_ps(output).unwrap();
+        let entries = parse_docker_ps(output, false).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].local_port, 8080);
         assert_eq!(entries[0].remote_port, Some(80));
@@ -97,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_parse_docker_ps_empty() {
-        let entries = parse_docker_ps("").unwrap();
+        let entries = parse_docker_ps("", false).unwrap();
         assert!(entries.is_empty());
     }
 }
