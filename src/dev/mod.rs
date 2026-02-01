@@ -2,9 +2,9 @@ pub mod check;
 pub mod listen;
 pub mod mock;
 
+use crate::port::{PortEntry, PortSource};
 use anyhow::Result;
 use clap::Subcommand;
-use crate::port::{PortEntry, PortSource};
 
 #[derive(Subcommand)]
 pub enum DevCommands {
@@ -50,31 +50,83 @@ pub const SCENARIOS: &[Scenario] = &[
         name: "web",
         description: "Web app + DB + Cache",
         entries: &[
-            ScenarioEntry { port: 3000, label: "web-app", should_listen: true },
-            ScenarioEntry { port: 5432, label: "postgres", should_listen: true },
-            ScenarioEntry { port: 6379, label: "redis", should_listen: true },
+            ScenarioEntry {
+                port: 3000,
+                label: "web-app",
+                should_listen: true,
+            },
+            ScenarioEntry {
+                port: 5432,
+                label: "postgres",
+                should_listen: true,
+            },
+            ScenarioEntry {
+                port: 6379,
+                label: "redis",
+                should_listen: true,
+            },
         ],
     },
     Scenario {
         name: "micro",
         description: "5 microservices",
         entries: &[
-            ScenarioEntry { port: 3001, label: "svc-auth", should_listen: true },
-            ScenarioEntry { port: 3002, label: "svc-users", should_listen: true },
-            ScenarioEntry { port: 3003, label: "svc-orders", should_listen: true },
-            ScenarioEntry { port: 3004, label: "svc-payments", should_listen: true },
-            ScenarioEntry { port: 3005, label: "svc-notifications", should_listen: true },
+            ScenarioEntry {
+                port: 3001,
+                label: "svc-auth",
+                should_listen: true,
+            },
+            ScenarioEntry {
+                port: 3002,
+                label: "svc-users",
+                should_listen: true,
+            },
+            ScenarioEntry {
+                port: 3003,
+                label: "svc-orders",
+                should_listen: true,
+            },
+            ScenarioEntry {
+                port: 3004,
+                label: "svc-payments",
+                should_listen: true,
+            },
+            ScenarioEntry {
+                port: 3005,
+                label: "svc-notifications",
+                should_listen: true,
+            },
         ],
     },
     Scenario {
         name: "full",
         description: "Mixed open/closed ports",
         entries: &[
-            ScenarioEntry { port: 3000, label: "web-app", should_listen: true },
-            ScenarioEntry { port: 5432, label: "postgres", should_listen: true },
-            ScenarioEntry { port: 6379, label: "redis", should_listen: true },
-            ScenarioEntry { port: 8080, label: "proxy (inactive)", should_listen: false },
-            ScenarioEntry { port: 9090, label: "metrics (inactive)", should_listen: false },
+            ScenarioEntry {
+                port: 3000,
+                label: "web-app",
+                should_listen: true,
+            },
+            ScenarioEntry {
+                port: 5432,
+                label: "postgres",
+                should_listen: true,
+            },
+            ScenarioEntry {
+                port: 6379,
+                label: "redis",
+                should_listen: true,
+            },
+            ScenarioEntry {
+                port: 8080,
+                label: "proxy (inactive)",
+                should_listen: false,
+            },
+            ScenarioEntry {
+                port: 9090,
+                label: "metrics (inactive)",
+                should_listen: false,
+            },
         ],
     },
 ];
@@ -98,46 +150,65 @@ async fn run_scenario(name: Option<String>, list: bool) -> Result<()> {
         println!("{:<10} {:<30} PORTS", "NAME", "DESCRIPTION");
         println!("{}", "-".repeat(60));
         for scenario in SCENARIOS {
-            let ports: Vec<String> = scenario.entries.iter().map(|e| {
-                if e.should_listen {
-                    format!("{}", e.port)
-                } else {
-                    format!("{}(off)", e.port)
-                }
-            }).collect();
-            println!("{:<10} {:<30} {}", scenario.name, scenario.description, ports.join(", "));
+            let ports: Vec<String> = scenario
+                .entries
+                .iter()
+                .map(|e| {
+                    if e.should_listen {
+                        format!("{}", e.port)
+                    } else {
+                        format!("{}(off)", e.port)
+                    }
+                })
+                .collect();
+            println!(
+                "{:<10} {:<30} {}",
+                scenario.name,
+                scenario.description,
+                ports.join(", ")
+            );
         }
         return Ok(());
     }
 
-    let name = name.ok_or_else(|| anyhow::anyhow!("Scenario name required. Use --list to see available scenarios."))?;
-    let scenario = find_scenario(&name)
-        .ok_or_else(|| anyhow::anyhow!("Unknown scenario '{}'. Use --list to see available scenarios.", name))?;
+    let name = name.ok_or_else(|| {
+        anyhow::anyhow!("Scenario name required. Use --list to see available scenarios.")
+    })?;
+    let scenario = find_scenario(&name).ok_or_else(|| {
+        anyhow::anyhow!("Unknown scenario '{name}'. Use --list to see available scenarios.")
+    })?;
 
-    println!("Starting scenario '{}': {}", scenario.name, scenario.description);
+    println!(
+        "Starting scenario '{}': {}",
+        scenario.name, scenario.description
+    );
 
     // Collect ports that should listen
-    let listen_ports: Vec<u16> = scenario.entries.iter()
+    let listen_ports: Vec<u16> = scenario
+        .entries
+        .iter()
         .filter(|e| e.should_listen)
         .map(|e| e.port)
         .collect();
 
     // Spawn background listeners for open ports (best-effort; ports may already be in use)
-    let handles = if !listen_ports.is_empty() {
+    let handles = if listen_ports.is_empty() {
+        Vec::new()
+    } else {
         match listen::spawn_listeners(listen_ports, false).await {
             Ok(h) => h,
             Err(e) => {
-                eprintln!("Note: could not bind listeners ({}), showing scenario entries only", e);
+                eprintln!("Note: could not bind listeners ({e}), showing scenario entries only");
                 Vec::new()
             }
         }
-    } else {
-        Vec::new()
     };
 
     // Build PortEntry list from all scenario entries
-    let mut entries: Vec<PortEntry> = scenario.entries.iter().map(|e| {
-        PortEntry {
+    let mut entries: Vec<PortEntry> = scenario
+        .entries
+        .iter()
+        .map(|e| PortEntry {
             source: PortSource::Local,
             local_port: e.port,
             remote_host: None,
@@ -149,8 +220,8 @@ async fn run_scenario(name: Option<String>, list: bool) -> Result<()> {
             ssh_host: None,
             is_open: e.should_listen,
             is_loopback: false,
-        }
-    }).collect();
+        })
+        .collect();
     entries.sort_by_key(|e| (!e.is_open, e.local_port));
 
     // Launch TUI with the scenario entries
@@ -192,7 +263,11 @@ mod tests {
     #[test]
     fn test_scenario_full_has_inactive() {
         let scenario = find_scenario("full").unwrap();
-        let inactive: Vec<_> = scenario.entries.iter().filter(|e| !e.should_listen).collect();
+        let inactive: Vec<_> = scenario
+            .entries
+            .iter()
+            .filter(|e| !e.should_listen)
+            .collect();
         assert!(!inactive.is_empty());
         assert_eq!(inactive.len(), 2);
     }

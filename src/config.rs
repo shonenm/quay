@@ -108,10 +108,10 @@ mouse_enabled = true
 
     #[test]
     fn test_parse_partial_config() {
-        let toml = r#"
+        let toml = r"
 [general]
 auto_refresh = true
-"#;
+";
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.general.auto_refresh);
         assert_eq!(config.general.refresh_interval, 5);
@@ -138,6 +138,9 @@ docker_target = "syntopic-dev"
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.general.remote_host, Some("ailab".to_string()));
-        assert_eq!(config.general.docker_target, Some("syntopic-dev".to_string()));
+        assert_eq!(
+            config.general.docker_target,
+            Some("syntopic-dev".to_string())
+        );
     }
 }

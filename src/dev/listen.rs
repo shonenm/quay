@@ -3,21 +3,21 @@ use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
-/// Bind and spawn TCP listeners on the given ports, returning their JoinHandles.
+/// Bind and spawn TCP listeners on the given ports, returning their `JoinHandles`.
 /// Binding failures are warned and skipped; returns Err only if no port could be bound.
 pub async fn spawn_listeners(ports: Vec<u16>, http: bool) -> Result<Vec<JoinHandle<()>>> {
     let mut tasks = Vec::new();
 
     for port in &ports {
         let port = *port;
-        match TcpListener::bind(format!("127.0.0.1:{}", port)).await {
+        match TcpListener::bind(format!("127.0.0.1:{port}")).await {
             Ok(listener) => {
-                println!("Listening on :{}", port);
+                println!("Listening on :{port}");
                 let task = tokio::spawn(accept_loop(listener, port, http));
                 tasks.push(task);
             }
             Err(e) => {
-                eprintln!("Warning: failed to bind :{} — {}", port, e);
+                eprintln!("Warning: failed to bind :{port} — {e}");
             }
         }
     }
@@ -52,7 +52,7 @@ async fn accept_loop(listener: TcpListener, port: u16, http: bool) {
         match listener.accept().await {
             Ok((mut stream, addr)) => {
                 if http {
-                    let body = format!("quay dev listener on :{}\n", port);
+                    let body = format!("quay dev listener on :{port}\n");
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n{}",
                         body.len(),
@@ -66,7 +66,7 @@ async fn accept_loop(listener: TcpListener, port: u16, http: bool) {
                 let _ = addr; // suppress unused warning in non-http mode
             }
             Err(e) => {
-                eprintln!("Accept error on :{}: {}", port, e);
+                eprintln!("Accept error on :{port}: {e}");
             }
         }
     }

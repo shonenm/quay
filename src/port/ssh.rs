@@ -4,7 +4,7 @@ use regex::Regex;
 use std::process::Command;
 
 /// Create an SSH port forward
-/// spec format: "local_port:remote_host:remote_port"
+/// spec format: "`local_port:remote_host:remote_port`"
 pub fn create_forward(spec: &str, host: &str, remote: bool) -> Result<u32> {
     let flag = if remote { "-R" } else { "-L" };
 
@@ -15,6 +15,7 @@ pub fn create_forward(spec: &str, host: &str, remote: bool) -> Result<u32> {
     Ok(child.id())
 }
 
+#[allow(clippy::unused_async)]
 pub async fn collect() -> Result<Vec<PortEntry>> {
     let output = Command::new("ps").args(["aux"]).output()?;
 
@@ -97,7 +98,7 @@ fn parse_ssh_forwards(output: &str) -> Result<Vec<PortEntry>> {
                 entries.push(PortEntry {
                     source: PortSource::Ssh,
                     local_port,
-                    remote_host: Some(format!("(R) {}:{}", local_host, remote_port)),
+                    remote_host: Some(format!("(R) {local_host}:{remote_port}")),
                     remote_port: Some(remote_port),
                     process_name: "ssh -R".to_string(),
                     pid,
@@ -133,8 +134,7 @@ mod tests {
 
     #[test]
     fn test_parse_ssh_remote_forward() {
-        let output =
-            "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -R 8080:localhost:3000 remote";
+        let output = "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -R 8080:localhost:3000 remote";
         let entries = parse_ssh_forwards(output).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].local_port, 3000);
@@ -162,8 +162,7 @@ mod tests {
 
     #[test]
     fn test_ssh_host_with_user_at() {
-        let output =
-            "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -L 9000:localhost:80 user@example.com";
+        let output = "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -L 9000:localhost:80 user@example.com";
         let entries = parse_ssh_forwards(output).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].ssh_host, Some("user@example.com".to_string()));
@@ -171,8 +170,7 @@ mod tests {
 
     #[test]
     fn test_ssh_host_with_flags() {
-        let output =
-            "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -f -N -L 9000:localhost:80 myserver";
+        let output = "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -f -N -L 9000:localhost:80 myserver";
         let entries = parse_ssh_forwards(output).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].ssh_host, Some("myserver".to_string()));
@@ -180,7 +178,8 @@ mod tests {
 
     #[test]
     fn test_extract_ssh_host_basic() {
-        let line = "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -L 9000:localhost:80 bastion";
+        let line =
+            "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -L 9000:localhost:80 bastion";
         assert_eq!(extract_ssh_host(line), Some("bastion".to_string()));
     }
 
@@ -193,7 +192,8 @@ mod tests {
 
     #[test]
     fn test_extract_ssh_host_none_when_last_is_flag() {
-        let line = "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -L 9000:localhost:80 -N";
+        let line =
+            "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -L 9000:localhost:80 -N";
         assert_eq!(extract_ssh_host(line), None);
     }
 }

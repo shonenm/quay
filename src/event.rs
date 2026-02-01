@@ -63,8 +63,7 @@ pub fn handle_popup_key(key: KeyEvent) -> Option<Action> {
 
 pub fn handle_search_key(key: KeyEvent, query: &mut String) -> Option<Action> {
     match key.code {
-        KeyCode::Esc => Some(Action::ExitSearch),
-        KeyCode::Enter => Some(Action::ExitSearch),
+        KeyCode::Esc | KeyCode::Enter => Some(Action::ExitSearch),
         KeyCode::Backspace => {
             query.pop();
             Some(Action::UpdateSearch)
@@ -77,7 +76,12 @@ pub fn handle_search_key(key: KeyEvent, query: &mut String) -> Option<Action> {
     }
 }
 
-pub fn handle_forward_key(key: KeyEvent, input: &mut ForwardInput, remote_mode: bool, docker_mode: bool) -> Option<Action> {
+pub fn handle_forward_key(
+    key: KeyEvent,
+    input: &mut ForwardInput,
+    remote_mode: bool,
+    docker_mode: bool,
+) -> Option<Action> {
     let is_locked = |field: ForwardField| -> bool {
         (remote_mode && field == ForwardField::SshHost)
             || (docker_mode && field == ForwardField::RemoteHost)

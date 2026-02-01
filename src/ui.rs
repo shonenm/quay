@@ -1,10 +1,10 @@
 use crate::app::{App, Filter, ForwardField, InputMode, Popup};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState},
-    Frame,
 };
 
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -35,13 +35,17 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let title_text = match (&app.remote_host, &app.docker_target) {
-        (Some(host), Some(target)) => format!("Quay [remote: {}] [docker: {}]", host, target),
-        (None, Some(target)) => format!("Quay [docker: {}]", target),
-        (Some(host), None) => format!("Quay [remote: {}]", host),
+        (Some(host), Some(target)) => format!("Quay [remote: {host}] [docker: {target}]"),
+        (None, Some(target)) => format!("Quay [docker: {target}]"),
+        (Some(host), None) => format!("Quay [remote: {host}]"),
         (None, None) => "Quay - Port Manager".to_string(),
     };
     let title = Paragraph::new(title_text)
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .block(Block::default().borders(Borders::ALL));
     frame.render_widget(title, area);
 }
@@ -65,7 +69,12 @@ fn draw_filter_bar(frame: &mut Frame, app: &App, area: Rect) {
             vec![
                 Span::raw("Search: "),
                 Span::styled(&app.search_query, Style::default().fg(Color::Yellow)),
-                Span::styled("_", Style::default().fg(Color::Yellow).add_modifier(Modifier::SLOW_BLINK)),
+                Span::styled(
+                    "_",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::SLOW_BLINK),
+                ),
             ]
         }
         InputMode::Normal => {
@@ -78,15 +87,21 @@ fn draw_filter_bar(frame: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    let paragraph = Paragraph::new(Line::from(content))
-        .block(Block::default().borders(Borders::ALL));
+    let paragraph =
+        Paragraph::new(Line::from(content)).block(Block::default().borders(Borders::ALL));
     frame.render_widget(paragraph, area);
 }
 
 fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
     let header_cells = ["TYPE", "LOCAL", "REMOTE", "PROCESS/CONTAINER"]
         .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
+        .map(|h| {
+            Cell::from(*h).style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+        });
     let header = Row::new(header_cells).height(1);
 
     let rows: Vec<Row> = app
@@ -113,7 +128,7 @@ fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
 
     let total = app.filtered_entries.len();
     let current = if total > 0 { app.selected + 1 } else { 0 };
-    let title = format!("Ports ({}/{})", current, total);
+    let title = format!("Ports ({current}/{total})");
 
     let table = Table::new(
         rows,
@@ -126,7 +141,11 @@ fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
     )
     .header(header)
     .block(Block::default().borders(Borders::ALL).title(title))
-    .row_highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+    .row_highlight_style(
+        Style::default()
+            .bg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+    )
     .highlight_symbol("> ");
 
     let mut state = TableState::default();
@@ -149,7 +168,10 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
         };
-        Line::from(Span::styled(help_text, Style::default().fg(Color::DarkGray)))
+        Line::from(Span::styled(
+            help_text,
+            Style::default().fg(Color::DarkGray),
+        ))
     };
 
     let paragraph = Paragraph::new(content);
@@ -180,9 +202,8 @@ fn draw_details_popup(frame: &mut Frame, app: &App) {
     let area = centered_rect(60, 50, frame.area());
     frame.render_widget(Clear, area);
 
-    let entry = match app.selected_entry() {
-        Some(e) => e,
-        None => return,
+    let Some(entry) = app.selected_entry() else {
+        return;
     };
 
     let (open_text, open_color) = if entry.is_open {
@@ -214,7 +235,7 @@ fn draw_details_popup(frame: &mut Frame, app: &App) {
         ]),
         Line::from(vec![
             Span::styled("PID: ", Style::default().fg(Color::Yellow)),
-            Span::raw(entry.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".to_string())),
+            Span::raw(entry.pid.map_or_else(|| "-".to_string(), |p| p.to_string())),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -223,13 +244,12 @@ fn draw_details_popup(frame: &mut Frame, app: &App) {
         ]),
     ];
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Details")
-                .style(Style::default().bg(Color::Black)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Details")
+            .style(Style::default().bg(Color::Black)),
+    );
     frame.render_widget(paragraph, area);
 }
 
@@ -238,20 +258,35 @@ fn draw_help_popup(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, area);
 
     let mut lines = vec![
-        Line::from(Span::styled("Navigation", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "Navigation",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
         Line::from("  j/↓     Move down"),
         Line::from("  k/↑     Move up"),
         Line::from("  g/Home  Go to first"),
         Line::from("  G/End   Go to last"),
         Line::from(""),
-        Line::from(Span::styled("Filtering", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "Filtering",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
         Line::from("  /       Search mode"),
         Line::from("  0       Show all"),
         Line::from("  1       Local only"),
         Line::from("  2       SSH only"),
         Line::from("  3       Docker only"),
         Line::from(""),
-        Line::from(Span::styled("Actions", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "Actions",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
         Line::from("  Enter   Show details"),
         Line::from("  K       Kill process"),
         Line::from("  f       New SSH forward"),
@@ -263,10 +298,15 @@ fn draw_help_popup(frame: &mut Frame, app: &App) {
 
     if app.is_docker_target() {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("Docker Target", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))));
+        lines.push(Line::from(Span::styled(
+            "Docker Target",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )));
         lines.push(Line::from("  Container ports discovered via ss"));
         if let Some(ref ip) = app.container_ip {
-            lines.push(Line::from(format!("  Container IP: {}", ip)));
+            lines.push(Line::from(format!("  Container IP: {ip}")));
         }
         lines.push(Line::from("  F tunnels through SSH to container"));
     }
@@ -283,16 +323,16 @@ fn draw_help_popup(frame: &mut Frame, app: &App) {
         ]),
     ]);
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Help")
-                .style(Style::default().bg(Color::Black)),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Help")
+            .style(Style::default().bg(Color::Black)),
+    );
     frame.render_widget(paragraph, area);
 }
 
+#[allow(clippy::too_many_lines)]
 fn draw_forward_popup(frame: &mut Frame, app: &App) {
     let area = centered_rect(60, 50, frame.area());
     frame.render_widget(Clear, area);
@@ -324,7 +364,9 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
         let valid = field_valid(field);
         if field == active {
             if valid {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
             }
@@ -337,8 +379,17 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
 
     let cursor = |field: ForwardField| {
         if field == active {
-            let color = if field_valid(field) { Color::Yellow } else { Color::Red };
-            Span::styled("_", Style::default().fg(color).add_modifier(Modifier::SLOW_BLINK))
+            let color = if field_valid(field) {
+                Color::Yellow
+            } else {
+                Color::Red
+            };
+            Span::styled(
+                "_",
+                Style::default()
+                    .fg(color)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            )
         } else {
             Span::raw("")
         }
@@ -358,30 +409,44 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
     let lines = vec![
         Line::from(Span::styled(
             "Create SSH Port Forward",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(vec![
             Span::styled("Local Port:  ", field_style(ForwardField::LocalPort)),
-            Span::styled(input.local_port.as_str(), field_style(ForwardField::LocalPort)),
+            Span::styled(
+                input.local_port.as_str(),
+                field_style(ForwardField::LocalPort),
+            ),
             cursor(ForwardField::LocalPort),
         ]),
         Line::from(if is_docker_target {
             vec![
                 Span::styled("Remote Host: ", field_style(ForwardField::RemoteHost)),
-                Span::styled(input.remote_host.as_str(), field_style(ForwardField::RemoteHost)),
+                Span::styled(
+                    input.remote_host.as_str(),
+                    field_style(ForwardField::RemoteHost),
+                ),
                 Span::styled(" (container IP)", Style::default().fg(Color::DarkGray)),
             ]
         } else {
             vec![
                 Span::styled("Remote Host: ", field_style(ForwardField::RemoteHost)),
-                Span::styled(input.remote_host.as_str(), field_style(ForwardField::RemoteHost)),
+                Span::styled(
+                    input.remote_host.as_str(),
+                    field_style(ForwardField::RemoteHost),
+                ),
                 cursor(ForwardField::RemoteHost),
             ]
         }),
         Line::from(vec![
             Span::styled("Remote Port: ", field_style(ForwardField::RemotePort)),
-            Span::styled(input.remote_port.as_str(), field_style(ForwardField::RemotePort)),
+            Span::styled(
+                input.remote_port.as_str(),
+                field_style(ForwardField::RemotePort),
+            ),
             cursor(ForwardField::RemotePort),
         ]),
         Line::from(if is_remote {
@@ -410,6 +475,7 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
+#[allow(clippy::too_many_lines)]
 fn draw_presets_popup(frame: &mut Frame, app: &App) {
     let area = centered_rect(60, 60, frame.area());
     frame.render_widget(Clear, area);
@@ -418,7 +484,9 @@ fn draw_presets_popup(frame: &mut Frame, app: &App) {
         let lines = vec![
             Line::from(Span::styled(
                 "No Presets",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from("Create presets in:"),
@@ -428,12 +496,30 @@ fn draw_presets_popup(frame: &mut Frame, app: &App) {
             )),
             Line::from(""),
             Line::from("Example:"),
-            Line::from(Span::styled("[[preset]]", Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled("name = \"My Server\"", Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled("local_port = 8080", Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled("remote_host = \"localhost\"", Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled("remote_port = 80", Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled("ssh_host = \"myserver\"", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "[[preset]]",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "name = \"My Server\"",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "local_port = 8080",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "remote_host = \"localhost\"",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "remote_port = 80",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "ssh_host = \"myserver\"",
+                Style::default().fg(Color::DarkGray),
+            )),
             Line::from(""),
             Line::from(vec![
                 Span::styled("[Esc] ", Style::default().fg(Color::DarkGray)),
@@ -454,7 +540,9 @@ fn draw_presets_popup(frame: &mut Frame, app: &App) {
     let mut lines = vec![
         Line::from(Span::styled(
             "SSH Forward Presets",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
     ];
@@ -463,18 +551,27 @@ fn draw_presets_popup(frame: &mut Frame, app: &App) {
         let is_selected = i == app.preset_selected;
         let prefix = if is_selected { "> " } else { "  " };
         let style = if is_selected {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
 
-        let key_str = preset.key.as_ref().map(|k| format!("[{}] ", k)).unwrap_or_default();
+        let key_str = preset
+            .key
+            .as_ref()
+            .map(|k| format!("[{k}] "))
+            .unwrap_or_default();
         lines.push(Line::from(Span::styled(
             format!("{}{}{}", prefix, key_str, preset.name),
             style,
         )));
         lines.push(Line::from(Span::styled(
-            format!("    {}:{} -> {}:{}", preset.local_port, preset.ssh_host, preset.remote_host, preset.remote_port),
+            format!(
+                "    {}:{} -> {}:{}",
+                preset.local_port, preset.ssh_host, preset.remote_host, preset.remote_port
+            ),
             Style::default().fg(Color::DarkGray),
         )));
     }

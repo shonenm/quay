@@ -1,6 +1,7 @@
 use crate::port::{PortEntry, PortSource};
 use anyhow::Result;
 
+#[allow(clippy::too_many_lines)]
 pub fn generate_mock_entries() -> Vec<PortEntry> {
     let mut entries = vec![
         // Local x 3
@@ -161,7 +162,10 @@ mod tests {
     #[test]
     fn test_mock_docker_entries_have_container_fields() {
         let entries = generate_mock_entries();
-        let docker_entries: Vec<_> = entries.iter().filter(|e| e.source == PortSource::Docker).collect();
+        let docker_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.source == PortSource::Docker)
+            .collect();
         assert!(!docker_entries.is_empty());
         for entry in docker_entries {
             assert!(entry.container_id.is_some());
@@ -172,7 +176,10 @@ mod tests {
     #[test]
     fn test_mock_local_entries_have_pid() {
         let entries = generate_mock_entries();
-        let local_entries: Vec<_> = entries.iter().filter(|e| e.source == PortSource::Local).collect();
+        let local_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.source == PortSource::Local)
+            .collect();
         assert!(!local_entries.is_empty());
         for entry in local_entries {
             assert!(entry.pid.is_some());

@@ -115,7 +115,11 @@ impl ForwardInput {
             remote_host: "localhost".to_string(),
             remote_port: entry.local_port.to_string(),
             ssh_host: entry.ssh_host.clone().unwrap_or_default(),
-            active_field: if has_ssh_host { ForwardField::LocalPort } else { ForwardField::SshHost },
+            active_field: if has_ssh_host {
+                ForwardField::LocalPort
+            } else {
+                ForwardField::SshHost
+            },
         }
     }
 
@@ -238,7 +242,7 @@ impl App {
     }
 
     pub fn should_refresh(&self) -> bool {
-        self.auto_refresh && self.tick_count > 0 && self.tick_count.is_multiple_of(self.refresh_ticks)
+        self.auto_refresh && self.tick_count > 0 && self.tick_count % self.refresh_ticks == 0
     }
 
     pub fn reset_forward_input(&mut self) {
@@ -270,8 +274,7 @@ impl App {
                         || e.local_port.to_string().contains(&query)
                         || e.remote_host
                             .as_ref()
-                            .map(|h| h.to_lowercase().contains(&query))
-                            .unwrap_or(false)
+                            .is_some_and(|h| h.to_lowercase().contains(&query))
                 };
 
                 source_match && search_match

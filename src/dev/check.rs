@@ -11,12 +11,9 @@ pub async fn run(ports: Vec<u16>) -> Result<()> {
     for port in &ports {
         let port = *port;
         handles.push(tokio::spawn(async move {
-            let addr = format!("127.0.0.1:{}", port);
-            let result = tokio::time::timeout(
-                Duration::from_millis(200),
-                TcpStream::connect(&addr),
-            )
-            .await;
+            let addr = format!("127.0.0.1:{port}");
+            let result =
+                tokio::time::timeout(Duration::from_millis(200), TcpStream::connect(&addr)).await;
             let is_open = result.is_ok() && result.unwrap().is_ok();
             (port, is_open)
         }));
@@ -38,9 +35,9 @@ pub async fn run(ports: Vec<u16>) -> Result<()> {
     for (port, is_open) in &results {
         if *is_open {
             open_count += 1;
-            println!(":{:<7} \x1b[32m●\x1b[0m      open", port);
+            println!(":{port:<7} \x1b[32m●\x1b[0m      open");
         } else {
-            println!(":{:<7} \x1b[90m○\x1b[0m      closed", port);
+            println!(":{port:<7} \x1b[90m○\x1b[0m      closed");
         }
     }
 
