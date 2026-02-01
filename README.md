@@ -138,6 +138,30 @@ ssh_host = "staging-bastion"
 - macOS or Linux (`lsof` for port detection)
 - Docker (optional, for container port detection)
 
+## Developer Tools
+
+Built-in tools for testing without real services running:
+
+```bash
+# Launch TUI with mock data
+quay dev mock
+
+# Run a scenario (spawns listeners + launches TUI)
+quay dev scenario full    # 3 open + 2 closed ports
+quay dev scenario web     # Web app + DB + Cache
+quay dev scenario micro   # 5 microservices
+quay dev scenario --list  # Show available scenarios
+
+# Listen on specific ports
+quay dev listen 4000 5000
+quay dev listen 8080 --http
+
+# Check if ports are open/closed
+quay dev check 3000 8080
+```
+
+Scenarios launch the TUI with pre-built entries, so both open (`●`) and closed (`○`) ports are visible even if the underlying ports are already in use.
+
 ## Development
 
 ```bash

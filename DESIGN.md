@@ -145,11 +145,16 @@ quay/
     ├── preset.rs         # SSHフォワードプリセット
     ├── ui.rs             # UI描画
     ├── event.rs          # キーボード・マウスイベント処理
-    └── port/
-        ├── mod.rs        # PortEntry, PortSource, collect_all()
-        ├── local.rs      # lsof パース
-        ├── ssh.rs        # SSH転送管理
-        └── docker.rs     # docker ps パース
+    ├── port/
+    │   ├── mod.rs        # PortEntry, PortSource, collect_all()
+    │   ├── local.rs      # lsof パース
+    │   ├── ssh.rs        # SSH転送管理
+    │   └── docker.rs     # docker ps パース
+    └── dev/
+        ├── mod.rs        # DevCommands, Scenario定義, run_scenario()
+        ├── listen.rs     # spawn_listeners(), TCPリスナー起動
+        ├── check.rs      # ポート開閉チェック
+        └── mock.rs       # モックデータでTUI起動
 ```
 
 ## CLI インターフェース
@@ -172,7 +177,27 @@ quay forward -R 9000:localhost:3000 remote-host  # リモート転送
 # プロセス停止
 quay kill 3000        # ポート番号で
 quay kill --pid 1234  # PIDで
+
+# 開発・テストツール
+quay dev mock                   # モックデータでTUI起動
+quay dev scenario full          # シナリオでTUI起動 (open/closed混在)
+quay dev scenario web           # Web + DB + Cache シナリオ
+quay dev scenario --list        # シナリオ一覧
+quay dev listen 4000 5000       # 指定ポートでTCPリスナー起動
+quay dev listen 8080 --http     # HTTP応答付きリスナー
+quay dev check 3000 8080        # ポート開閉チェック
 ```
+
+### dev scenario の動作
+
+`run_scenario()` は以下の順序で動作する:
+
+1. `should_listen: true` のポートに対して `spawn_listeners()` でバックグラウンドリスナーを起動（ベストエフォート）
+2. シナリオ全エントリから `PortEntry` を生成（open/closed 両方）
+3. `run_tui_with_entries()` で TUI を起動
+4. TUI 終了時にリスナーを abort
+
+ポートが既に使用中の場合でも TUI は起動し、シナリオ定義に基づいた全エントリが表示される。
 
 ## 実装ステップ
 

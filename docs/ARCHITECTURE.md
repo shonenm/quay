@@ -18,6 +18,11 @@ Quay is a TUI port manager that displays local processes, SSH port forwards, and
 │                       port/                                 │
 │    local.rs    │    docker.rs    │      ssh.rs             │
 │   (lsof)       │   (docker ps)   │    (ps aux)             │
+├─────────────────────────────────────────────────────────────┤
+│                       dev/                                  │
+│   listen.rs    │    mock.rs      │    check.rs             │
+│ (TCP listeners) │  (mock data)   │  (port probing)         │
+│                 mod.rs (scenarios + TUI launch)             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -31,11 +36,16 @@ src/
 ├── event.rs          # Keyboard/mouse event handling
 ├── preset.rs         # SSH forward presets
 ├── ui.rs             # UI rendering with ratatui
-└── port/
-    ├── mod.rs        # PortEntry, PortSource, collect_all()
-    ├── local.rs      # lsof parsing for local ports
-    ├── docker.rs     # docker ps parsing
-    └── ssh.rs        # SSH forward detection
+├── port/
+│   ├── mod.rs        # PortEntry, PortSource, collect_all()
+│   ├── local.rs      # lsof parsing for local ports
+│   ├── docker.rs     # docker ps parsing
+│   └── ssh.rs        # SSH forward detection
+└── dev/
+    ├── mod.rs        # DevCommands, Scenario definitions, run_scenario()
+    ├── listen.rs     # spawn_listeners(), TCP accept loop
+    ├── check.rs      # Port open/closed probing
+    └── mock.rs       # Mock data generation for TUI testing
 ```
 
 ## Data Model
@@ -196,3 +206,26 @@ Popup rendering uses `centered_rect()` for modal positioning.
 | anyhow | Error handling |
 | toml | Config file parsing |
 | dirs | Config directory paths |
+
+## Dev Scenario Flow
+
+`quay dev scenario <name>` bypasses port scanning and builds entries directly from scenario definitions:
+
+```
+1. run_scenario()
+   ├── spawn_listeners(listen_ports)   # Best-effort, non-fatal on failure
+   │       ↓
+   │   Vec<JoinHandle<()>>             # Background TCP accept loops
+   │
+   ├── Build Vec<PortEntry> from scenario definition
+   │   ├── should_listen: true  → is_open: true,  process_name: label
+   │   └── should_listen: false → is_open: false, process_name: label
+   │
+   ├── run_tui_with_entries(Some(entries))
+   │       ↓
+   │   TUI event loop (mock mode — no port::collect_all)
+   │
+   └── Abort all JoinHandles on TUI exit
+```
+
+This allows testing the TUI with both open and closed port entries without requiring real services.

@@ -50,7 +50,12 @@ quay/
     ├── event.rs          # Event handling
     ├── preset.rs         # SSH presets
     ├── ui.rs             # UI rendering
-    └── port/             # Port collection modules
+    ├── port/             # Port collection modules
+    └── dev/              # Developer/testing tools
+        ├── mod.rs        # DevCommands, scenarios, run_scenario()
+        ├── listen.rs     # spawn_listeners(), TCP listener spawning
+        ├── check.rs      # Port open/closed checking
+        └── mock.rs       # Mock data TUI launch
 ```
 
 ## Commands
@@ -102,8 +107,16 @@ src/port/ssh.rs     → test_parse_ssh_local_forward, test_parse_ssh_remote_forw
 src/config.rs       → test_default_config, test_parse_config, test_parse_partial_config
 src/preset.rs       → test_default_presets, test_parse_presets
 src/app.rs          → test_refresh_ticks_default, test_should_refresh_uses_refresh_ticks
+src/dev/mod.rs      → test_scenario_lookup, test_scenario_web_ports,
+                      test_scenario_micro_has_five, test_scenario_full_has_inactive
+src/dev/mock.rs     → test_mock_entries_not_empty, test_mock_entries_have_all_sources,
+                      test_mock_entries_have_mixed_open_status, test_mock_entries_have_unique_ports,
+                      test_mock_docker_entries_have_container_fields, test_mock_local_entries_have_pid
 src/main.rs         → test_cli_parse_default, test_cli_parse_list,
-                      test_cli_parse_forward, test_cli_parse_kill
+                      test_cli_parse_forward, test_cli_parse_kill,
+                      test_cli_parse_dev_listen, test_cli_parse_dev_listen_http,
+                      test_cli_parse_dev_scenario, test_cli_parse_dev_scenario_list,
+                      test_cli_parse_dev_check, test_cli_parse_dev_mock
 ```
 
 Run all tests:
@@ -153,6 +166,26 @@ cargo test
    - Change `refresh_interval` in `config.toml` and verify auto-refresh timing changes
    - Change `default_filter` and verify the TUI starts with the specified filter
    - Remove `config.toml` and verify defaults are applied
+
+7. **Dev Scenarios**
+   ```bash
+   # TUI with mock data
+   cargo run -- dev mock
+
+   # Scenario with open + closed ports
+   cargo run -- dev scenario full
+   # → TUI shows 5 entries: 3 open (●) + 2 closed (○)
+
+   # Web scenario (all open)
+   cargo run -- dev scenario web
+
+   # List available scenarios
+   cargo run -- dev scenario --list
+
+   # Standalone listener (Ctrl+C to stop)
+   cargo run -- dev listen 4000 5000
+   ```
+   Note: If scenario listen ports are already in use, the TUI still launches with all entries displayed (listeners are best-effort).
 
 ## Configuration
 
