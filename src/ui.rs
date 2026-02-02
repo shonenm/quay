@@ -1,4 +1,4 @@
-use crate::app::{App, Filter, ForwardField, InputMode, Popup};
+use crate::app::{App, ConnectionField, ConnectionPopupMode, Filter, ForwardField, InputMode, Popup};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -29,24 +29,82 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Popup::Help => draw_help_popup(frame, app),
         Popup::Forward => draw_forward_popup(frame, app),
         Popup::Presets => draw_presets_popup(frame, app),
+        Popup::Connections => draw_connections_popup(frame, app),
         Popup::None => {}
     }
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
-    let title_text = match (&app.remote_host, &app.docker_target) {
-        (Some(host), Some(target)) => format!("Quay [remote: {host}] [docker: {target}]"),
-        (None, Some(target)) => format!("Quay [docker: {target}]"),
-        (Some(host), None) => format!("Quay [remote: {host}]"),
-        (None, None) => "Quay - Port Manager".to_string(),
-    };
-    let title = Paragraph::new(title_text)
-        .style(
+    let content = if app.has_multiple_connections() {
+        let conn_name = app
+            .active_connection()
+            .map_or("Unknown", |c| c.name.as_str());
+        let index = app.active_connection + 1;
+        let total = app.connections.len();
+
+        let mut spans = vec![
+            Span::styled(
+                "Quay  ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("\u{25c0} ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                conn_name,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" \u{25b6}", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("  [{index}/{total}]"),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ];
+
+        // Show remote/docker info
+        match (&app.remote_host, &app.docker_target) {
+            (Some(host), Some(target)) => {
+                spans.push(Span::styled(
+                    format!("  [remote: {host}] [docker: {target}]"),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
+            (Some(host), None) => {
+                spans.push(Span::styled(
+                    format!("  [remote: {host}]"),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
+            (None, Some(target)) => {
+                spans.push(Span::styled(
+                    format!("  [docker: {target}]"),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
+            (None, None) => {}
+        }
+
+        Line::from(spans)
+    } else {
+        let title_text = match (&app.remote_host, &app.docker_target) {
+            (Some(host), Some(target)) => {
+                format!("Quay [remote: {host}] [docker: {target}]")
+            }
+            (None, Some(target)) => format!("Quay [docker: {target}]"),
+            (Some(host), None) => format!("Quay [remote: {host}]"),
+            (None, None) => "Quay - Port Manager".to_string(),
+        };
+        Line::from(Span::styled(
+            title_text,
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-        )
-        .block(Block::default().borders(Borders::ALL));
+        ))
+    };
+
+    let title = Paragraph::new(content).block(Block::default().borders(Borders::ALL));
     frame.render_widget(title, area);
 }
 
@@ -158,13 +216,18 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     let content = if let Some((ref message, _)) = app.status_message {
         Line::from(Span::styled(message, Style::default().fg(Color::Yellow)))
     } else {
+        let switch_hint = if app.has_multiple_connections() {
+            "[h/l] Switch  "
+        } else {
+            ""
+        };
         let help_text = match app.input_mode {
             InputMode::Search => "[Enter/Esc] Done  [Backspace] Delete".to_string(),
             InputMode::Normal => {
                 if app.is_remote() || app.is_docker_target() {
-                    "[j/k] Navigate  [Enter] Details  [F] Quick Forward  [f] Forward  [K] Kill  [?] Help  [q] Quit".to_string()
+                    format!("{switch_hint}[j/k] Navigate  [Enter] Details  [F] Quick Forward  [f] Forward  [K] Kill  [?] Help  [q] Quit")
                 } else {
-                    "[j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [p] Presets  [?] Help  [q] Quit".to_string()
+                    format!("{switch_hint}[j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [p] Presets  [?] Help  [q] Quit")
                 }
             }
         };
@@ -316,6 +379,16 @@ fn draw_help_popup(frame: &mut Frame, app: &App) {
         Line::from("  r       Refresh"),
         Line::from("  a       Toggle auto-refresh"),
         Line::from("  q/Esc   Quit"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Connections",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from("  h       Previous connection"),
+        Line::from("  l       Next connection"),
+        Line::from("  c       Connection manager"),
         Line::from(""),
         Line::from(vec![
             Span::styled("[Esc] ", Style::default().fg(Color::DarkGray)),
@@ -470,6 +543,179 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
         Block::default()
             .borders(Borders::ALL)
             .title("New Forward")
+            .style(Style::default().bg(Color::Black)),
+    );
+    frame.render_widget(paragraph, area);
+}
+
+#[allow(clippy::too_many_lines)]
+fn draw_connections_popup(frame: &mut Frame, app: &App) {
+    let area = centered_rect(60, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    if app.connection_popup_mode == ConnectionPopupMode::AddNew {
+        draw_connection_add_form(frame, app, area);
+        return;
+    }
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Connections",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+
+    for (i, conn) in app.connections.iter().enumerate() {
+        let is_selected = i == app.connection_selected;
+        let is_active = i == app.active_connection;
+        let prefix = if is_selected { "> " } else { "  " };
+        let active_marker = if is_active { " *" } else { "" };
+
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        lines.push(Line::from(Span::styled(
+            format!("{prefix}{}{active_marker}", conn.name),
+            style,
+        )));
+
+        // Show remote/docker details
+        let mut details = Vec::new();
+        if let Some(ref host) = conn.remote_host {
+            details.push(format!("remote: {host}"));
+        }
+        if let Some(ref target) = conn.docker_target {
+            details.push(format!("docker: {target}"));
+        }
+        if !details.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("    {}", details.join("  ")),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "[j/k] Navigate  [Enter] Switch  [a] Add  [d] Delete  [Esc] Close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Connections")
+            .style(Style::default().bg(Color::Black)),
+    );
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_connection_add_form(frame: &mut Frame, app: &App, area: Rect) {
+    let input = &app.connection_input;
+    let active = input.active_field;
+
+    let field_style = |field: ConnectionField| {
+        if field == active {
+            if field == ConnectionField::Name && !input.is_name_valid() {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            }
+        } else if field == ConnectionField::Name && !input.is_name_valid() {
+            Style::default().fg(Color::Red)
+        } else {
+            Style::default().fg(Color::White)
+        }
+    };
+
+    let cursor = |field: ConnectionField| {
+        if field == active {
+            let color = if field == ConnectionField::Name && !input.is_name_valid() {
+                Color::Red
+            } else {
+                Color::Yellow
+            };
+            Span::styled(
+                "_",
+                Style::default()
+                    .fg(color)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            )
+        } else {
+            Span::raw("")
+        }
+    };
+
+    let footer = if input.is_valid() {
+        Line::from(Span::styled(
+            "[Tab] Next field  [Enter] Save  [Esc] Cancel",
+            Style::default().fg(Color::DarkGray),
+        ))
+    } else {
+        Line::from(Span::styled(
+            "Name is required  [Tab] Next field  [Esc] Cancel",
+            Style::default().fg(Color::Red),
+        ))
+    };
+
+    let lines = vec![
+        Line::from(Span::styled(
+            "New Connection",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Name:           ", field_style(ConnectionField::Name)),
+            Span::styled(input.name.as_str(), field_style(ConnectionField::Name)),
+            cursor(ConnectionField::Name),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "Remote Host:    ",
+                field_style(ConnectionField::RemoteHost),
+            ),
+            Span::styled(
+                input.remote_host.as_str(),
+                field_style(ConnectionField::RemoteHost),
+            ),
+            cursor(ConnectionField::RemoteHost),
+        ]),
+        Line::from(vec![
+            Span::styled(
+                "Docker Target:  ",
+                field_style(ConnectionField::DockerTarget),
+            ),
+            Span::styled(
+                input.docker_target.as_str(),
+                field_style(ConnectionField::DockerTarget),
+            ),
+            cursor(ConnectionField::DockerTarget),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "(Remote Host / Docker Target are optional)",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        footer,
+    ];
+
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("New Connection")
             .style(Style::default().bg(Color::Black)),
     );
     frame.render_widget(paragraph, area);

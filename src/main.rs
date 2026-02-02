@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod connection;
 mod dev;
 mod event;
 mod port;
@@ -7,7 +8,7 @@ mod preset;
 mod ui;
 
 use anyhow::Result;
-use app::{App, Filter, ForwardInput, InputMode, Popup};
+use app::{App, ConnectionPopupMode, Filter, ForwardInput, InputMode, Popup};
 use clap::{Parser, Subcommand};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -15,8 +16,9 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use event::{
-    Action, AppEvent, EventHandler, handle_forward_key, handle_key, handle_mouse, handle_popup_key,
-    handle_preset_key, handle_search_key,
+    Action, AppEvent, EventHandler, handle_connection_input_key, handle_connection_key,
+    handle_forward_key, handle_key, handle_mouse, handle_popup_key, handle_preset_key,
+    handle_search_key,
 };
 use port::PortEntry;
 use ratatui::prelude::*;
@@ -269,6 +271,40 @@ pub(crate) async fn run_tui_with_entries(
     let presets = preset::Presets::load();
     app.presets = presets.preset;
 
+    // Load connections
+    let mut stored_connections = connection::Connections::load();
+    let all_connections = stored_connections.all_with_local();
+    app.connections = all_connections;
+
+    // In mock mode, add sample connections for testing h/l switching
+    if mock_mode && app.connections.len() <= 1 {
+        app.connections.push(connection::Connection {
+            name: "Production".to_string(),
+            remote_host: Some("user@prod-server".to_string()),
+            docker_target: None,
+        });
+        app.connections.push(connection::Connection {
+            name: "AI Lab".to_string(),
+            remote_host: Some("ailab".to_string()),
+            docker_target: Some("syntopic-dev".to_string()),
+        });
+    }
+
+    // CLI args: find matching connection or keep Local with overrides
+    if app.remote_host.is_some() || app.docker_target.is_some() {
+        let mut found = false;
+        for (i, conn) in app.connections.iter().enumerate() {
+            if conn.remote_host == app.remote_host && conn.docker_target == app.docker_target {
+                app.active_connection = i;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            // Keep Local (index 0) but CLI values already override remote_host/docker_target
+        }
+    }
+
     // Load initial data
     if let Some(entries) = initial {
         app.set_entries(entries);
@@ -399,6 +435,129 @@ pub(crate) async fn run_tui_with_entries(
                                     }
                                 }
                                 app.popup = Popup::None;
+                            }
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
+
+                // Handle Connections popup
+                if app.popup == Popup::Connections {
+                    if app.connection_popup_mode == ConnectionPopupMode::AddNew {
+                        if let Some(action) =
+                            handle_connection_input_key(key, &mut app.connection_input)
+                        {
+                            match action {
+                                Action::ClosePopup => {
+                                    // Go back to List mode
+                                    app.connection_popup_mode = ConnectionPopupMode::List;
+                                    app.reset_connection_input();
+                                }
+                                Action::SubmitConnection => {
+                                    if let Some(conn) = app.connection_input.to_connection() {
+                                        let name = conn.name.clone();
+                                        stored_connections.add(conn);
+                                        if let Err(e) = stored_connections.save() {
+                                            app.set_status(&format!("Save failed: {e}"));
+                                        } else {
+                                            app.connections =
+                                                stored_connections.all_with_local();
+                                            app.set_status(&format!(
+                                                "Added connection: {name}"
+                                            ));
+                                        }
+                                        app.connection_popup_mode = ConnectionPopupMode::List;
+                                        app.reset_connection_input();
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if let Some(action) = handle_connection_key(key) {
+                        match action {
+                            Action::ClosePopup => {
+                                app.popup = Popup::None;
+                            }
+                            Action::Up => app.connection_previous(),
+                            Action::Down => app.connection_next(),
+                            Action::ActivateConnection => {
+                                app.active_connection = app.connection_selected;
+                                app.apply_connection();
+                                // Resolve container IP
+                                if let Some(ref target) = app.docker_target {
+                                    match port::docker::get_container_ip(
+                                        target,
+                                        app.remote_host.as_deref(),
+                                    ) {
+                                        Ok(ip) => app.container_ip = Some(ip),
+                                        Err(e) => app.set_status(&format!(
+                                            "Container IP lookup failed: {e}"
+                                        )),
+                                    }
+                                }
+                                // Re-collect ports
+                                if mock_mode {
+                                    app.entries.clear();
+                                    app.apply_filter();
+                                } else if let Ok(entries) = port::collect_all(
+                                    app.remote_host.as_deref(),
+                                    app.docker_target.as_deref(),
+                                )
+                                .await
+                                {
+                                    app.set_entries(entries);
+                                }
+                                let name = app
+                                    .active_connection()
+                                    .map_or("Unknown", |c| c.name.as_str())
+                                    .to_string();
+                                app.selected = 0;
+                                app.set_status(&format!("Switched to: {name}"));
+                                app.popup = Popup::None;
+                            }
+                            Action::AddConnection => {
+                                app.connection_popup_mode = ConnectionPopupMode::AddNew;
+                                app.reset_connection_input();
+                            }
+                            Action::DeleteConnection => {
+                                if app.connection_selected == 0 {
+                                    app.set_status("Cannot delete Local connection");
+                                } else {
+                                    let user_index = app.connection_selected - 1;
+                                    let name = stored_connections
+                                        .connection
+                                        .get(user_index)
+                                        .map_or("Unknown".to_string(), |c| c.name.clone());
+                                    if stored_connections.remove(user_index) {
+                                        if let Err(e) = stored_connections.save() {
+                                            app.set_status(&format!("Save failed: {e}"));
+                                        } else {
+                                            app.connections =
+                                                stored_connections.all_with_local();
+                                            // Adjust active_connection if needed
+                                            if app.active_connection >= app.connections.len() {
+                                                app.active_connection =
+                                                    app.connections.len().saturating_sub(1);
+                                                app.apply_connection();
+                                            } else if app.active_connection
+                                                == app.connection_selected
+                                            {
+                                                // Deleted the active connection, switch to Local
+                                                app.active_connection = 0;
+                                                app.apply_connection();
+                                            }
+                                            // Adjust selection cursor
+                                            if app.connection_selected >= app.connections.len() {
+                                                app.connection_selected =
+                                                    app.connections.len().saturating_sub(1);
+                                            }
+                                            app.set_status(&format!(
+                                                "Deleted connection: {name}"
+                                            ));
+                                        }
+                                    }
+                                }
                             }
                             _ => {}
                         }
@@ -657,7 +816,88 @@ pub(crate) async fn run_tui_with_entries(
                                 }
                             }
                         }
-                        Action::SubmitForward | Action::LaunchPreset | Action::SelectRow(_) => {
+                        Action::PrevConnection => {
+                            if app.has_multiple_connections() {
+                                app.prev_connection();
+                                app.apply_connection();
+                                // Resolve container IP
+                                if let Some(ref target) = app.docker_target {
+                                    match port::docker::get_container_ip(
+                                        target,
+                                        app.remote_host.as_deref(),
+                                    ) {
+                                        Ok(ip) => app.container_ip = Some(ip),
+                                        Err(e) => app.set_status(&format!(
+                                            "Container IP lookup failed: {e}"
+                                        )),
+                                    }
+                                }
+                                if mock_mode {
+                                    app.entries.clear();
+                                    app.apply_filter();
+                                } else if let Ok(entries) = port::collect_all(
+                                    app.remote_host.as_deref(),
+                                    app.docker_target.as_deref(),
+                                )
+                                .await
+                                {
+                                    app.set_entries(entries);
+                                }
+                                let name = app
+                                    .active_connection()
+                                    .map_or("Unknown", |c| c.name.as_str())
+                                    .to_string();
+                                app.selected = 0;
+                                app.set_status(&format!("Switched to: {name}"));
+                            }
+                        }
+                        Action::NextConnection => {
+                            if app.has_multiple_connections() {
+                                app.next_connection();
+                                app.apply_connection();
+                                // Resolve container IP
+                                if let Some(ref target) = app.docker_target {
+                                    match port::docker::get_container_ip(
+                                        target,
+                                        app.remote_host.as_deref(),
+                                    ) {
+                                        Ok(ip) => app.container_ip = Some(ip),
+                                        Err(e) => app.set_status(&format!(
+                                            "Container IP lookup failed: {e}"
+                                        )),
+                                    }
+                                }
+                                if mock_mode {
+                                    app.entries.clear();
+                                    app.apply_filter();
+                                } else if let Ok(entries) = port::collect_all(
+                                    app.remote_host.as_deref(),
+                                    app.docker_target.as_deref(),
+                                )
+                                .await
+                                {
+                                    app.set_entries(entries);
+                                }
+                                let name = app
+                                    .active_connection()
+                                    .map_or("Unknown", |c| c.name.as_str())
+                                    .to_string();
+                                app.selected = 0;
+                                app.set_status(&format!("Switched to: {name}"));
+                            }
+                        }
+                        Action::ShowConnections => {
+                            app.connection_selected = app.active_connection;
+                            app.connection_popup_mode = ConnectionPopupMode::List;
+                            app.popup = Popup::Connections;
+                        }
+                        Action::SubmitForward
+                        | Action::LaunchPreset
+                        | Action::SelectRow(_)
+                        | Action::ActivateConnection
+                        | Action::AddConnection
+                        | Action::DeleteConnection
+                        | Action::SubmitConnection => {
                             // Handled elsewhere (popup handlers or mouse handler)
                         }
                     }
