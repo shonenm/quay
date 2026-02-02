@@ -1,3 +1,4 @@
+use crate::connection::Connection;
 use crate::port::{PortEntry, PortSource};
 use crate::preset::Preset;
 
@@ -14,6 +15,89 @@ pub enum Popup {
     Help,
     Forward,
     Presets,
+    Connections,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConnectionPopupMode {
+    #[default]
+    List,
+    AddNew,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConnectionField {
+    #[default]
+    Name,
+    RemoteHost,
+    DockerTarget,
+}
+
+impl ConnectionField {
+    pub fn next(self) -> Self {
+        match self {
+            ConnectionField::Name => ConnectionField::RemoteHost,
+            ConnectionField::RemoteHost => ConnectionField::DockerTarget,
+            ConnectionField::DockerTarget => ConnectionField::Name,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            ConnectionField::Name => ConnectionField::DockerTarget,
+            ConnectionField::RemoteHost => ConnectionField::Name,
+            ConnectionField::DockerTarget => ConnectionField::RemoteHost,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ConnectionInput {
+    pub name: String,
+    pub remote_host: String,
+    pub docker_target: String,
+    pub active_field: ConnectionField,
+}
+
+impl ConnectionInput {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn active_value(&mut self) -> &mut String {
+        match self.active_field {
+            ConnectionField::Name => &mut self.name,
+            ConnectionField::RemoteHost => &mut self.remote_host,
+            ConnectionField::DockerTarget => &mut self.docker_target,
+        }
+    }
+
+    pub fn is_name_valid(&self) -> bool {
+        !self.name.trim().is_empty()
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.is_name_valid()
+    }
+
+    pub fn to_connection(&self) -> Option<Connection> {
+        if !self.is_valid() {
+            return None;
+        }
+        Some(Connection {
+            name: self.name.trim().to_string(),
+            remote_host: if self.remote_host.trim().is_empty() {
+                None
+            } else {
+                Some(self.remote_host.trim().to_string())
+            },
+            docker_target: if self.docker_target.trim().is_empty() {
+                None
+            } else {
+                Some(self.docker_target.trim().to_string())
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -171,6 +255,11 @@ pub struct App {
     pub remote_host: Option<String>,
     pub docker_target: Option<String>,
     pub container_ip: Option<String>,
+    pub connections: Vec<Connection>,
+    pub active_connection: usize,
+    pub connection_selected: usize,
+    pub connection_input: ConnectionInput,
+    pub connection_popup_mode: ConnectionPopupMode,
 }
 
 impl App {
@@ -194,6 +283,11 @@ impl App {
             remote_host: None,
             docker_target: None,
             container_ip: None,
+            connections: vec![Connection::local()],
+            active_connection: 0,
+            connection_selected: 0,
+            connection_input: ConnectionInput::new(),
+            connection_popup_mode: ConnectionPopupMode::List,
         }
     }
 
@@ -319,6 +413,57 @@ impl App {
 
     pub fn selected_entry(&self) -> Option<&PortEntry> {
         self.filtered_entries.get(self.selected)
+    }
+
+    pub fn has_multiple_connections(&self) -> bool {
+        self.connections.len() > 1
+    }
+
+    pub fn active_connection(&self) -> Option<&Connection> {
+        self.connections.get(self.active_connection)
+    }
+
+    pub fn next_connection(&mut self) {
+        if !self.connections.is_empty() {
+            self.active_connection = (self.active_connection + 1) % self.connections.len();
+        }
+    }
+
+    pub fn prev_connection(&mut self) {
+        if !self.connections.is_empty() {
+            self.active_connection = self
+                .active_connection
+                .checked_sub(1)
+                .unwrap_or(self.connections.len() - 1);
+        }
+    }
+
+    pub fn apply_connection(&mut self) {
+        if let Some(conn) = self.connections.get(self.active_connection).cloned() {
+            self.remote_host = conn.remote_host;
+            self.docker_target = conn.docker_target;
+            self.container_ip = None;
+        }
+    }
+
+    pub fn connection_next(&mut self) {
+        if !self.connections.is_empty() {
+            self.connection_selected =
+                (self.connection_selected + 1) % self.connections.len();
+        }
+    }
+
+    pub fn connection_previous(&mut self) {
+        if !self.connections.is_empty() {
+            self.connection_selected = self
+                .connection_selected
+                .checked_sub(1)
+                .unwrap_or(self.connections.len() - 1);
+        }
+    }
+
+    pub fn reset_connection_input(&mut self) {
+        self.connection_input = ConnectionInput::new();
     }
 }
 
@@ -495,6 +640,145 @@ mod tests {
     fn test_forward_input_to_spec_invalid() {
         let input = ForwardInput::new();
         assert!(input.to_spec().is_none());
+    }
+
+    #[test]
+    fn test_connection_input_valid() {
+        let input = ConnectionInput {
+            name: "Test".to_string(),
+            remote_host: String::new(),
+            docker_target: String::new(),
+            active_field: ConnectionField::Name,
+        };
+        assert!(input.is_valid());
+        assert!(input.is_name_valid());
+    }
+
+    #[test]
+    fn test_connection_input_empty_name_invalid() {
+        let input = ConnectionInput::new();
+        assert!(!input.is_valid());
+        assert!(!input.is_name_valid());
+    }
+
+    #[test]
+    fn test_connection_input_whitespace_name_invalid() {
+        let input = ConnectionInput {
+            name: "   ".to_string(),
+            remote_host: String::new(),
+            docker_target: String::new(),
+            active_field: ConnectionField::Name,
+        };
+        assert!(!input.is_valid());
+    }
+
+    #[test]
+    fn test_connection_input_to_connection() {
+        let input = ConnectionInput {
+            name: "My Server".to_string(),
+            remote_host: "user@server".to_string(),
+            docker_target: String::new(),
+            active_field: ConnectionField::Name,
+        };
+        let conn = input.to_connection().unwrap();
+        assert_eq!(conn.name, "My Server");
+        assert_eq!(conn.remote_host, Some("user@server".to_string()));
+        assert!(conn.docker_target.is_none());
+    }
+
+    #[test]
+    fn test_connection_input_to_connection_with_docker() {
+        let input = ConnectionInput {
+            name: "Docker".to_string(),
+            remote_host: "ailab".to_string(),
+            docker_target: "syntopic-dev".to_string(),
+            active_field: ConnectionField::Name,
+        };
+        let conn = input.to_connection().unwrap();
+        assert_eq!(conn.name, "Docker");
+        assert_eq!(conn.remote_host, Some("ailab".to_string()));
+        assert_eq!(conn.docker_target, Some("syntopic-dev".to_string()));
+    }
+
+    #[test]
+    fn test_connection_input_to_connection_invalid() {
+        let input = ConnectionInput::new();
+        assert!(input.to_connection().is_none());
+    }
+
+    #[test]
+    fn test_connection_field_next() {
+        assert_eq!(ConnectionField::Name.next(), ConnectionField::RemoteHost);
+        assert_eq!(
+            ConnectionField::RemoteHost.next(),
+            ConnectionField::DockerTarget
+        );
+        assert_eq!(ConnectionField::DockerTarget.next(), ConnectionField::Name);
+    }
+
+    #[test]
+    fn test_connection_field_prev() {
+        assert_eq!(ConnectionField::Name.prev(), ConnectionField::DockerTarget);
+        assert_eq!(ConnectionField::RemoteHost.prev(), ConnectionField::Name);
+        assert_eq!(
+            ConnectionField::DockerTarget.prev(),
+            ConnectionField::RemoteHost
+        );
+    }
+
+    #[test]
+    fn test_has_multiple_connections() {
+        let mut app = App::new();
+        assert!(!app.has_multiple_connections());
+        app.connections.push(Connection {
+            name: "Test".to_string(),
+            remote_host: None,
+            docker_target: None,
+        });
+        assert!(app.has_multiple_connections());
+    }
+
+    #[test]
+    fn test_next_prev_connection() {
+        let mut app = App::new();
+        app.connections.push(Connection {
+            name: "A".to_string(),
+            remote_host: None,
+            docker_target: None,
+        });
+        app.connections.push(Connection {
+            name: "B".to_string(),
+            remote_host: None,
+            docker_target: None,
+        });
+
+        assert_eq!(app.active_connection, 0);
+        app.next_connection();
+        assert_eq!(app.active_connection, 1);
+        app.next_connection();
+        assert_eq!(app.active_connection, 2);
+        app.next_connection();
+        assert_eq!(app.active_connection, 0); // wraps
+
+        app.prev_connection();
+        assert_eq!(app.active_connection, 2); // wraps
+        app.prev_connection();
+        assert_eq!(app.active_connection, 1);
+    }
+
+    #[test]
+    fn test_apply_connection() {
+        let mut app = App::new();
+        app.connections.push(Connection {
+            name: "Remote".to_string(),
+            remote_host: Some("user@server".to_string()),
+            docker_target: Some("container".to_string()),
+        });
+        app.active_connection = 1;
+        app.apply_connection();
+        assert_eq!(app.remote_host, Some("user@server".to_string()));
+        assert_eq!(app.docker_target, Some("container".to_string()));
+        assert!(app.container_ip.is_none());
     }
 
     #[test]

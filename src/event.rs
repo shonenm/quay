@@ -1,5 +1,7 @@
-use crate::app::{ForwardField, ForwardInput};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crate::app::{ConnectionInput, ForwardField, ForwardInput};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use std::time::Duration;
 
 pub enum AppEvent {
@@ -20,7 +22,9 @@ impl EventHandler {
     pub fn next(&self) -> anyhow::Result<AppEvent> {
         if event::poll(self.tick_rate)? {
             match event::read()? {
-                Event::Key(key) => return Ok(AppEvent::Key(key)),
+                Event::Key(key) if key.kind == KeyEventKind::Press => {
+                    return Ok(AppEvent::Key(key));
+                }
                 Event::Mouse(mouse) => return Ok(AppEvent::Mouse(mouse)),
                 _ => {}
             }
@@ -43,12 +47,20 @@ pub fn handle_key(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('f') => Some(Action::StartForward),
         KeyCode::Char('F') => Some(Action::QuickForward),
         KeyCode::Char('p') => Some(Action::ShowPresets),
+        KeyCode::Char('h') => Some(Action::PrevConnection),
+        KeyCode::Char('l') => Some(Action::NextConnection),
+        KeyCode::Char('c') => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                Some(Action::Quit)
+            } else {
+                Some(Action::ShowConnections)
+            }
+        }
         KeyCode::Char('0') => Some(Action::FilterAll),
         KeyCode::Char('1') => Some(Action::FilterLocal),
         KeyCode::Char('2') => Some(Action::FilterSsh),
         KeyCode::Char('3') => Some(Action::FilterDocker),
         KeyCode::Char('K') => Some(Action::Kill),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
         KeyCode::Enter => Some(Action::Select),
         _ => None,
     }
@@ -146,6 +158,51 @@ pub fn handle_preset_key(key: KeyEvent) -> Option<Action> {
     }
 }
 
+pub fn handle_connection_key(key: KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => Some(Action::ClosePopup),
+        KeyCode::Enter => Some(Action::ActivateConnection),
+        KeyCode::Char('j') | KeyCode::Down => Some(Action::Down),
+        KeyCode::Char('k') | KeyCode::Up => Some(Action::Up),
+        KeyCode::Char('a') => Some(Action::AddConnection),
+        KeyCode::Char('d') => Some(Action::DeleteConnection),
+        _ => None,
+    }
+}
+
+pub fn handle_connection_input_key(
+    key: KeyEvent,
+    input: &mut ConnectionInput,
+) -> Option<Action> {
+    match key.code {
+        KeyCode::Esc => Some(Action::ClosePopup),
+        KeyCode::Enter => {
+            if input.is_valid() {
+                Some(Action::SubmitConnection)
+            } else {
+                None
+            }
+        }
+        KeyCode::Tab | KeyCode::Down => {
+            input.active_field = input.active_field.next();
+            None
+        }
+        KeyCode::BackTab | KeyCode::Up => {
+            input.active_field = input.active_field.prev();
+            None
+        }
+        KeyCode::Backspace => {
+            input.active_value().pop();
+            None
+        }
+        KeyCode::Char(c) => {
+            input.active_value().push(c);
+            None
+        }
+        _ => None,
+    }
+}
+
 pub fn handle_mouse(event: MouseEvent, table_top: u16, table_height: u16) -> Option<Action> {
     match event.kind {
         MouseEventKind::Down(_) => {
@@ -188,4 +245,41 @@ pub enum Action {
     ShowPresets,
     LaunchPreset,
     QuickForward,
+    PrevConnection,
+    NextConnection,
+    ShowConnections,
+    ActivateConnection,
+    AddConnection,
+    DeleteConnection,
+    SubmitConnection,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyEvent;
+
+    #[test]
+    fn test_c_key_shows_connections() {
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
+        assert!(matches!(handle_key(key), Some(Action::ShowConnections)));
+    }
+
+    #[test]
+    fn test_ctrl_c_quits() {
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(matches!(handle_key(key), Some(Action::Quit)));
+    }
+
+    #[test]
+    fn test_h_key_prev_connection() {
+        let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
+        assert!(matches!(handle_key(key), Some(Action::PrevConnection)));
+    }
+
+    #[test]
+    fn test_l_key_next_connection() {
+        let key = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE);
+        assert!(matches!(handle_key(key), Some(Action::NextConnection)));
+    }
 }
