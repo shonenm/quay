@@ -13,6 +13,7 @@ A TUI port manager for local processes, SSH forwards, and Docker containers.
 - **Docker Target Mode**: Discover LISTEN ports inside a Docker container and forward them via SSH (`quay --remote host --docker container`)
 - **Interactive TUI**: Navigate with keyboard, filter by source, search by name/port
 - **Quick Actions**: Kill processes or create SSH forwards directly from the interface
+- **Connection Manager**: Save and switch between multiple hosts (local, remote, Docker) via `c` key
 - **SSH Presets**: Save frequently used port forwards as presets for one-key launch
 - **Mouse Support**: Click and scroll navigation (configurable)
 - **Configuration**: Customize auto-refresh interval, default filter, and more via `~/.config/quay/config.toml`
@@ -115,6 +116,9 @@ quay forward 8080:localhost:80 remote-host -R
 | `f` | Create SSH forward |
 | `F` | Quick forward (remote/docker mode, same port) |
 | `p` | Open presets |
+| `c` | Connection manager |
+| `h` | Previous connection |
+| `l` | Next connection |
 | `r` | Refresh |
 | `a` | Toggle auto-refresh |
 | `0` | Show all |
@@ -160,6 +164,21 @@ docker_target = "my-container"  # optional: default docker container
 [ui]
 mouse_enabled = true
 ```
+
+### connections.toml
+
+```toml
+[[connection]]
+name = "Production"
+remote_host = "user@prod-server"
+
+[[connection]]
+name = "AI Lab + Docker"
+remote_host = "ailab"
+docker_target = "syntopic-dev"
+```
+
+A "Local" connection is always available at index 0. Use `c` to open the connection manager, `h`/`l` to switch quickly.
 
 ### presets.toml
 

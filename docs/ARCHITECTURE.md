@@ -12,8 +12,8 @@ Quay is a TUI port manager that displays local processes, SSH port forwards, and
 │     app.rs      │     event.rs      │       ui.rs          │
 │  (App State)    │  (Event Handling) │   (UI Rendering)     │
 ├─────────────────────────────────────────────────────────────┤
-│   config.rs     │    preset.rs                              │
-│  (Settings)     │   (SSH Presets)                           │
+│   config.rs     │  connection.rs  │    preset.rs              │
+│  (Settings)     │ (Connections)   │   (SSH Presets)           │
 ├─────────────────────────────────────────────────────────────┤
 │                       port/                                 │
 │    local.rs    │    docker.rs    │      ssh.rs             │
@@ -33,6 +33,7 @@ src/
 ├── main.rs           # Entry point, CLI parsing, TUI loop
 ├── app.rs            # Application state (App struct)
 ├── config.rs         # Configuration file handling
+├── connection.rs     # Connection manager (load/save/add/remove)
 ├── event.rs          # Keyboard/mouse event handling
 ├── preset.rs         # SSH forward presets
 ├── ui.rs             # UI rendering with ratatui
@@ -78,7 +79,7 @@ pub struct App {
     pub filter: Filter,                   // All|Local|Ssh|Docker
     pub search_query: String,
     pub input_mode: InputMode,            // Normal|Search
-    pub popup: Popup,                     // None|Details|Help|Forward|Presets
+    pub popup: Popup,                     // None|Details|Help|Forward|Presets|Connections
     pub should_quit: bool,
     pub forward_input: ForwardInput,      // SSH forward creation form
     pub auto_refresh: bool,               // Auto-refresh enabled
@@ -90,6 +91,11 @@ pub struct App {
     pub remote_host: Option<String>,      // Remote mode SSH host
     pub docker_target: Option<String>,    // Docker target container name
     pub container_ip: Option<String>,     // Docker target container IP
+    pub connections: Vec<Connection>,     // All connections (Local + user-defined)
+    pub active_connection: usize,         // Currently active connection index
+    pub connection_selected: usize,       // Selected in popup
+    pub connection_input: ConnectionInput,// Add-new form state
+    pub connection_popup_mode: ConnectionPopupMode, // List|AddNew
 }
 
 pub struct ForwardInput {
@@ -215,6 +221,8 @@ Event handler functions:
 - `handle_popup_key()` - Popup dismissal
 - `handle_forward_key()` - Forward creation form input (remote_mode skips SSH Host, docker_mode skips Remote Host)
 - `handle_preset_key()` - Preset selection
+- `handle_connection_key()` - Connection list popup (navigate, activate, add, delete)
+- `handle_connection_input_key()` - Add-new connection form input
 - `handle_mouse()` - Mouse click and scroll handling
 
 ### ui.rs

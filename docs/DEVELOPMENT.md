@@ -47,6 +47,7 @@ quay/
     ├── main.rs           # Entry point
     ├── app.rs            # State management
     ├── config.rs         # Configuration handling
+    ├── connection.rs     # Connection manager
     ├── event.rs          # Event handling
     ├── preset.rs         # SSH presets
     ├── ui.rs             # UI rendering
@@ -113,13 +114,26 @@ src/port/ssh.rs     → test_parse_ssh_local_forward, test_parse_ssh_remote_forw
 src/config.rs       → test_default_config, test_parse_config, test_parse_partial_config,
                       test_parse_config_with_remote_host, test_parse_config_with_docker_target
 src/preset.rs       → test_default_presets, test_parse_presets
+src/connection.rs   → test_local_connection, test_default_connections,
+                      test_all_with_local, test_all_with_local_empty,
+                      test_add_connection, test_remove_connection, test_remove_out_of_bounds,
+                      test_parse_connections_toml, test_serialize_connections
 src/app.rs          → test_refresh_ticks_default, test_should_refresh_uses_refresh_ticks,
-                      test_is_remote, test_is_docker_target, test_forward_input_for_remote_entry
+                      test_is_remote, test_is_docker_target, test_forward_input_for_remote_entry,
+                      test_connection_input_valid, test_connection_input_empty_name_invalid,
+                      test_connection_input_whitespace_name_invalid,
+                      test_connection_input_to_connection, test_connection_input_to_connection_with_docker,
+                      test_connection_input_to_connection_invalid,
+                      test_connection_field_next, test_connection_field_prev,
+                      test_has_multiple_connections, test_next_prev_connection,
+                      test_apply_connection
 src/dev/mod.rs      → test_scenario_lookup, test_scenario_web_ports,
                       test_scenario_micro_has_five, test_scenario_full_has_inactive
 src/dev/mock.rs     → test_mock_entries_not_empty, test_mock_entries_have_all_sources,
                       test_mock_entries_have_mixed_open_status, test_mock_entries_have_unique_ports,
                       test_mock_docker_entries_have_container_fields, test_mock_local_entries_have_pid
+src/event.rs        → test_c_key_shows_connections, test_ctrl_c_quits,
+                      test_h_key_prev_connection, test_l_key_next_connection
 src/main.rs         → test_cli_parse_default, test_cli_parse_list,
                       test_cli_parse_forward, test_cli_parse_kill,
                       test_cli_parse_remote, test_cli_parse_remote_with_list,
@@ -220,7 +234,35 @@ cargo test
    cargo run -- -r ailab -d syntopic-dev
    ```
 
-9. **Dev Scenarios**
+9. **Connection Manager**
+   ```bash
+   # Mock mode includes sample connections (Local, Production, AI Lab)
+   cargo run -- dev mock
+   # → Header shows ◀ Local ▶ [1/3]
+   # → Press h/l to switch connections
+   # → Press c to open connection manager popup
+   # → In popup: j/k to navigate, Enter to activate, a to add, d to delete
+   ```
+
+   To test with real connections:
+   ```bash
+   cat > ~/.config/quay/connections.toml << 'EOF'
+   [[connection]]
+   name = "My Server"
+   remote_host = "user@server"
+
+   [[connection]]
+   name = "Docker Host"
+   remote_host = "ailab"
+   docker_target = "syntopic-dev"
+   EOF
+
+   cargo run
+   # → Press c to see all connections
+   # → Press h/l to switch between them
+   ```
+
+10. **Dev Scenarios**
    ```bash
    # TUI with mock data
    cargo run -- dev mock
@@ -263,6 +305,21 @@ default_filter = "all"
 
 [ui]
 mouse_enabled = true
+EOF
+```
+
+### connections.toml
+
+```bash
+cat > ~/.config/quay/connections.toml << 'EOF'
+[[connection]]
+name = "Production"
+remote_host = "user@prod-server"
+
+[[connection]]
+name = "AI Lab + Docker"
+remote_host = "ailab"
+docker_target = "syntopic-dev"
 EOF
 ```
 

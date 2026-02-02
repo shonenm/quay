@@ -24,8 +24,9 @@
 | プロセス停止 | 選択したポートのプロセスを kill |
 | 自動更新 | 定期的にポート情報を再取得 |
 | プリセット | SSH転送テンプレートをワンキーで起動 |
+| 接続マネージャ | 複数ホスト (Local/Remote/Docker) を `c` で管理、`h`/`l` で切替 |
 | マウスサポート | クリック・スクロール操作（設定で有効化） |
-| 設定ファイル | auto_refresh, refresh_interval, default_filter, remote_host, docker_target, mouse_enabled |
+| 設定ファイル | auto_refresh, refresh_interval, default_filter, remote_host, docker_target, mouse_enabled, connections.toml |
 
 ## データモデル
 
@@ -169,6 +170,9 @@ ssh -f -N -L local_port:container_ip:container_port host
 | `0` | 全て表示 |
 | `a` | 自動更新の切り替え |
 | `p` | プリセット表示 |
+| `c` | 接続マネージャ |
+| `h` | 前の接続に切替 |
+| `l` | 次の接続に切替 |
 | `q` / `Esc` | 終了 |
 | `?` | ヘルプ表示 |
 
@@ -186,6 +190,7 @@ quay/
     ├── main.rs           # エントリーポイント、CLI引数
     ├── app.rs            # アプリケーション状態
     ├── config.rs         # 設定ファイル処理
+    ├── connection.rs     # 接続マネージャ (load/save/add/remove)
     ├── preset.rs         # SSHフォワードプリセット
     ├── ui.rs             # UI描画
     ├── event.rs          # キーボード・マウスイベント処理
@@ -314,6 +319,25 @@ quay dev check 3000 8080        # ポート開閉チェック
 35. [x] Forward Form — Remote Host / SSH Host ロック (event.rs, ui.rs)
 36. [x] Kill — docker exec kill (main.rs)
 37. [x] Docker ターゲット UI 表示 (ui.rs — ヘッダー、フッター、ヘルプ、フォーム)
+
+### Phase 9: 接続マネージャ
+38. [x] Connection 構造体 + Connections ラッパー (connection.rs)
+    - `~/.config/quay/connections.toml`
+    - load/save/add/remove、Local 自動挿入
+39. [x] App に接続管理フィールド追加 (app.rs)
+    - Popup::Connections, ConnectionPopupMode, ConnectionField, ConnectionInput
+    - next_connection, prev_connection, apply_connection
+40. [x] イベント処理 (event.rs)
+    - `c` → ShowConnections, `h` → PrevConnection, `l` → NextConnection
+    - handle_connection_key, handle_connection_input_key
+41. [x] TUI ループ統合 (main.rs)
+    - 接続ロード + CLI 引数マッチング
+    - Connections ポップアップハンドラ (List + AddNew)
+    - h/l 接続切替 (ポート再収集 + container IP 解決)
+42. [x] UI (ui.rs)
+    - ヘッダーにタブ風表示、draw_connections_popup, draw_connection_add_form
+    - Help に Connections セクション、Footer に [h/l] Switch
+43. [x] Mock モードにサンプル接続追加 (main.rs)
 
 ## 参考
 
