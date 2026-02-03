@@ -1,6 +1,6 @@
 [package]
 name = "quay-tui"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "A TUI port manager for local processes, SSH forwards, and Docker containers"
 authors = ["matsushimakouta"]
@@ -41,7 +41,7 @@ regex = "1"
 
 # Config
 toml = "0.8"
-dirs = "5"
+user_dirs = "0.1"
 
 # cargo-dist configuration
 [package.metadata.dist]

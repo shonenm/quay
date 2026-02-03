@@ -1,4 +1,4 @@
-use crate::port::{PortEntry, PortSource};
+use crate::port::{dedup_entries, PortEntry, PortSource};
 use anyhow::Result;
 
 #[allow(clippy::too_many_lines)]
@@ -42,6 +42,34 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             container_name: None,
             ssh_host: None,
             is_open: false,
+            is_loopback: false,
+        },
+        // Duplicate LOCAL entries that overlap with SSH/Docker
+        // (simulates lsof detecting the ssh/docker-proxy LISTEN socket)
+        PortEntry {
+            source: PortSource::Local,
+            local_port: 9000,
+            remote_host: None,
+            remote_port: None,
+            process_name: "ssh".to_string(),
+            pid: Some(4567),
+            container_id: None,
+            container_name: None,
+            ssh_host: None,
+            is_open: true,
+            is_loopback: false,
+        },
+        PortEntry {
+            source: PortSource::Local,
+            local_port: 5432,
+            remote_host: None,
+            remote_port: None,
+            process_name: "docker-proxy".to_string(),
+            pid: Some(9876),
+            container_id: None,
+            container_name: None,
+            ssh_host: None,
+            is_open: true,
             is_loopback: false,
         },
         // SSH x 2
@@ -112,6 +140,9 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             is_loopback: false,
         },
     ];
+
+    // Deduplicate: remove LOCAL entries that overlap with SSH/Docker
+    dedup_entries(&mut entries);
 
     // Sort: open first, then by port number (same as collect_all)
     entries.sort_by_key(|e| (!e.is_open, e.local_port));

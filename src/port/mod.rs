@@ -85,7 +85,21 @@ async fn collect_entries(remote_host: Option<&str>) -> anyhow::Result<Vec<PortEn
         entries.extend(ssh);
     }
 
+    dedup_entries(&mut entries);
+
     Ok(entries)
+}
+
+/// Remove LOCAL entries whose port overlaps with SSH or Docker entries.
+/// SSH/Docker processes listen locally (visible via lsof), so the LOCAL
+/// duplicate is redundant and would cause double-counting in the TUI.
+pub fn dedup_entries(entries: &mut Vec<PortEntry>) {
+    let non_local_ports: HashSet<u16> = entries
+        .iter()
+        .filter(|e| e.source != PortSource::Local)
+        .map(|e| e.local_port)
+        .collect();
+    entries.retain(|e| e.source != PortSource::Local || !non_local_ports.contains(&e.local_port));
 }
 
 async fn probe_open_ports(entries: &mut [PortEntry], remote_mode: bool) {
@@ -202,5 +216,67 @@ pub async fn kill_by_port(port: u16, remote_host: Option<&str>) -> anyhow::Resul
                 anyhow::bail!("No container ID found for port {port}")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_entry(source: PortSource, local_port: u16) -> PortEntry {
+        PortEntry {
+            source,
+            local_port,
+            remote_host: None,
+            remote_port: None,
+            process_name: String::new(),
+            pid: None,
+            container_id: None,
+            container_name: None,
+            ssh_host: None,
+            is_open: false,
+            is_loopback: false,
+        }
+    }
+
+    #[test]
+    fn test_dedup_ssh_overrides_local() {
+        let mut entries = vec![
+            make_entry(PortSource::Local, 9000),
+            make_entry(PortSource::Ssh, 9000),
+        ];
+
+        dedup_entries(&mut entries);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source, PortSource::Ssh);
+        assert_eq!(entries[0].local_port, 9000);
+    }
+
+    #[test]
+    fn test_dedup_docker_overrides_local() {
+        let mut entries = vec![
+            make_entry(PortSource::Local, 8080),
+            make_entry(PortSource::Docker, 8080),
+        ];
+
+        dedup_entries(&mut entries);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].source, PortSource::Docker);
+        assert_eq!(entries[0].local_port, 8080);
+    }
+
+    #[test]
+    fn test_dedup_no_overlap() {
+        let mut entries = vec![
+            make_entry(PortSource::Local, 3000),
+            make_entry(PortSource::Ssh, 9000),
+            make_entry(PortSource::Docker, 8080),
+        ];
+
+        dedup_entries(&mut entries);
+
+        assert_eq!(entries.len(), 3);
     }
 }

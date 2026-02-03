@@ -52,7 +52,7 @@ impl Default for GeneralConfig {
 
 impl Config {
     pub fn config_dir() -> Option<PathBuf> {
-        dirs::config_dir().map(|p| p.join("quay"))
+        user_dirs::config_dir().ok().map(|p| p.join("quay"))
     }
 
     pub fn config_path() -> Option<PathBuf> {
