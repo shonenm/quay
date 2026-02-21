@@ -3,6 +3,9 @@ use crate::port::{PortEntry, PortSource};
 use crate::preset::Preset;
 use std::collections::HashMap;
 
+const STATUS_MESSAGE_TICKS: u32 = 12;
+const DEFAULT_REFRESH_TICKS: u32 = 20;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
     Normal,
@@ -282,7 +285,7 @@ impl App {
             forward_input: ForwardInput::new(),
             auto_refresh: false,
             tick_count: 0,
-            refresh_ticks: 20,
+            refresh_ticks: DEFAULT_REFRESH_TICKS,
             status_message: None,
             presets: Vec::new(),
             preset_selected: 0,
@@ -326,8 +329,7 @@ impl App {
     }
 
     pub fn set_status(&mut self, message: &str) {
-        // Show message for ~3 seconds (12 ticks at 250ms)
-        self.status_message = Some((message.to_string(), 12));
+        self.status_message = Some((message.to_string(), STATUS_MESSAGE_TICKS));
     }
 
     pub fn tick(&mut self) {
@@ -475,9 +477,9 @@ impl App {
     }
 
     pub fn apply_connection(&mut self) {
-        if let Some(conn) = self.connections.get(self.active_connection).cloned() {
-            self.remote_host = conn.remote_host;
-            self.docker_target = conn.docker_target;
+        if let Some(conn) = self.connections.get(self.active_connection) {
+            self.remote_host = conn.remote_host.clone();
+            self.docker_target = conn.docker_target.clone();
             self.container_ip = None;
         }
     }
@@ -516,7 +518,7 @@ mod tests {
     #[test]
     fn test_refresh_ticks_default() {
         let app = App::new();
-        assert_eq!(app.refresh_ticks, 20);
+        assert_eq!(app.refresh_ticks, DEFAULT_REFRESH_TICKS);
     }
 
     #[test]

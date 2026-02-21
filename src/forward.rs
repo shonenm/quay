@@ -96,11 +96,10 @@ impl Forwards {
 
 pub fn is_port_listening(port: u16) -> bool {
     let addr = format!("127.0.0.1:{port}");
-    TcpStream::connect_timeout(
-        &addr.parse().expect("valid socket addr"),
-        Duration::from_millis(200),
-    )
-    .is_ok()
+    let Ok(socket_addr) = addr.parse() else {
+        return false;
+    };
+    TcpStream::connect_timeout(&socket_addr, Duration::from_millis(200)).is_ok()
 }
 
 #[cfg(test)]

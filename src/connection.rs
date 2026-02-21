@@ -60,8 +60,9 @@ impl Connections {
 
     /// Returns all connections with Local auto-inserted at index 0.
     pub fn all_with_local(&self) -> Vec<Connection> {
-        let mut result = vec![Connection::local()];
-        result.extend(self.connection.clone());
+        let mut result = Vec::with_capacity(1 + self.connection.len());
+        result.push(Connection::local());
+        result.extend(self.connection.iter().cloned());
         result
     }
 
