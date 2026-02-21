@@ -34,6 +34,276 @@ fn save_forwards(app: &mut app::App) {
     }
 }
 
+async fn refresh_and_save(app: &mut App) {
+    match port::collect_all(
+        app.remote_host.as_deref(),
+        app.docker_target.as_deref(),
+        app.known_forwards(),
+    )
+    .await
+    {
+        Ok(entries) => {
+            if app.set_entries(entries) {
+                save_forwards(app);
+            }
+        }
+        Err(e) => app.set_status(&format!("Refresh failed: {e}")),
+    }
+}
+
+async fn resolve_container_ip(app: &mut App) {
+    if let Some(ref target) = app.docker_target {
+        match port::docker::get_container_ip(target, app.remote_host.as_deref()).await {
+            Ok(ip) => app.container_ip = Some(ip),
+            Err(e) => app.set_status(&format!("Container IP lookup failed: {e}")),
+        }
+    }
+}
+
+async fn handle_submit_forward(app: &mut App, mock_mode: bool) {
+    if mock_mode {
+        if app.forward_input.to_spec().is_some() {
+            let local_port: u16 = app.forward_input.local_port.parse().unwrap_or(0);
+            let mock_entry = PortEntry {
+                source: port::PortSource::Ssh,
+                local_port,
+                remote_host: Some(app.forward_input.remote_host.clone()),
+                remote_port: app.forward_input.remote_port.parse().ok(),
+                process_name: "ssh".to_string(),
+                pid: Some(99999),
+                container_id: None,
+                container_name: None,
+                ssh_host: Some(app.forward_input.ssh_host.clone()),
+                is_open: true,
+                is_loopback: false,
+                forwarded_port: None,
+            };
+            let mut entries = app.entries.clone();
+            entries.push(mock_entry);
+            entries.sort_by_key(|e| (!e.is_open, e.local_port));
+            app.set_entries(entries);
+            app.set_status("[mock] Forward created");
+        } else {
+            app.set_status("Invalid forward specification");
+        }
+    } else if let Some((spec, host)) = app.forward_input.to_spec() {
+        let local_port: Option<u16> = app.forward_input.local_port.parse().ok();
+        let already_listening = local_port.is_some_and(forward::is_port_listening);
+
+        if already_listening {
+            if app.is_docker_target() {
+                if let (Ok(rp), Ok(lp)) = (
+                    app.forward_input.remote_port.parse::<u16>(),
+                    app.forward_input.local_port.parse::<u16>(),
+                ) {
+                    app.ssh_forwards
+                        .entry(app.active_connection)
+                        .or_default()
+                        .insert(rp, lp);
+                    save_forwards(app);
+                }
+            }
+            app.set_status("Forward already active, registered mapping");
+            refresh_and_save(app).await;
+        } else {
+            match port::ssh::create_forward(&spec, &host, false) {
+                Ok(pid) => {
+                    if app.is_docker_target() {
+                        if let (Ok(rp), Ok(lp)) = (
+                            app.forward_input.remote_port.parse::<u16>(),
+                            app.forward_input.local_port.parse::<u16>(),
+                        ) {
+                            app.ssh_forwards
+                                .entry(app.active_connection)
+                                .or_default()
+                                .insert(rp, lp);
+                            save_forwards(app);
+                        }
+                    }
+                    app.set_status(&format!("Forward created (PID: {pid})"));
+                    refresh_and_save(app).await;
+                }
+                Err(e) => {
+                    app.set_status(&format!("Forward failed: {e}"));
+                }
+            }
+        }
+    } else {
+        app.set_status("Invalid forward specification");
+    }
+    app.popup = Popup::None;
+    app.reset_forward_input();
+}
+
+async fn handle_kill_action(app: &mut App, mock_mode: bool) {
+    let Some(entry) = app.selected_entry() else {
+        return;
+    };
+    let port = entry.local_port;
+    let pid = entry.pid;
+    let is_ssh = entry.source == port::PortSource::Ssh;
+
+    if mock_mode {
+        let entries: Vec<_> = app
+            .entries
+            .iter()
+            .filter(|e| e.local_port != port)
+            .cloned()
+            .collect();
+        app.set_entries(entries);
+        app.set_status(&format!("[mock] Removed port {port}"));
+    } else if app.is_docker_target() {
+        if let Some(pid) = pid {
+            if let Some(ref target) = app.docker_target {
+                let pid_str = pid.to_string();
+                let result = match app.remote_host.as_deref() {
+                    Some(host) => port::ssh_cmd_tokio(
+                        host,
+                        &["docker", "exec", target, "kill", &pid_str],
+                    )
+                    .status()
+                    .await,
+                    None => tokio::process::Command::new("docker")
+                        .args(["exec", target, "kill", &pid_str])
+                        .status()
+                        .await,
+                };
+                match result {
+                    Ok(status) if status.success() => {
+                        app.set_status(&format!("Killed PID {pid} in container"));
+                        refresh_and_save(app).await;
+                    }
+                    Ok(_) => {
+                        app.set_status(&format!("Kill failed for PID {pid} in container"));
+                    }
+                    Err(e) => {
+                        app.set_status(&format!("Kill failed: {e}"));
+                    }
+                }
+            }
+        } else {
+            app.set_status(
+                "No PID available for this port (container ss doesn't report PIDs)",
+            );
+        }
+    } else {
+        let kill_host = if is_ssh {
+            None
+        } else {
+            app.remote_host.as_deref()
+        };
+        match port::kill_by_port(port, kill_host).await {
+            Ok(()) => {
+                app.set_status(&format!("Killed process on port {port}"));
+                refresh_and_save(app).await;
+            }
+            Err(e) => {
+                app.set_status(&format!("Kill failed: {e}"));
+            }
+        }
+    }
+}
+
+async fn handle_quick_forward(app: &mut App, mock_mode: bool) {
+    let Some(entry) = app.selected_entry() else {
+        return;
+    };
+    let port = entry.local_port;
+
+    let Some(host) = app.remote_host.clone() else {
+        if app.is_docker_target() {
+            app.set_status("Quick Forward for local Docker not yet supported");
+        } else {
+            app.set_status("Quick Forward requires --remote mode");
+        }
+        return;
+    };
+
+    let forward_target = if app.is_docker_target() {
+        if let Some(ip) = app.container_ip.as_deref() {
+            ip.to_string()
+        } else {
+            app.set_status("Container IP not available");
+            return;
+        }
+    } else {
+        "localhost".to_string()
+    };
+    let spec = format!("{port}:{forward_target}:{port}");
+
+    if mock_mode {
+        let mock_entry = PortEntry {
+            source: port::PortSource::Ssh,
+            local_port: port,
+            remote_host: Some(forward_target.clone()),
+            remote_port: Some(port),
+            process_name: "ssh".to_string(),
+            pid: Some(99999),
+            container_id: None,
+            container_name: None,
+            ssh_host: Some(host.clone()),
+            is_open: true,
+            is_loopback: false,
+            forwarded_port: None,
+        };
+        let mut entries = app.entries.clone();
+        entries.push(mock_entry);
+        entries.sort_by_key(|e| (!e.is_open, e.local_port));
+        app.set_entries(entries);
+        app.set_status(&format!("[mock] Forward :{port} -> {host}:{port}"));
+    } else if forward::is_port_listening(port) {
+        app.ssh_forwards
+            .entry(app.active_connection)
+            .or_default()
+            .insert(port, port);
+        save_forwards(app);
+        app.set_status("Forward already active, registered mapping");
+        refresh_and_save(app).await;
+    } else {
+        match port::ssh::create_forward(&spec, &host, false) {
+            Ok(pid) => {
+                app.ssh_forwards
+                    .entry(app.active_connection)
+                    .or_default()
+                    .insert(port, port);
+                save_forwards(app);
+                app.set_status(&format!(
+                    "Forward :{port} -> {host}:{port} (PID: {pid})"
+                ));
+                refresh_and_save(app).await;
+            }
+            Err(e) => {
+                app.set_status(&format!("Forward failed: {e}"));
+            }
+        }
+    }
+}
+
+async fn handle_connection_switch(app: &mut App, direction: i32, mock_mode: bool) {
+    if !app.has_multiple_connections() {
+        return;
+    }
+    if direction > 0 {
+        app.next_connection();
+    } else {
+        app.prev_connection();
+    }
+    app.apply_connection();
+    resolve_container_ip(app).await;
+    if mock_mode {
+        app.entries.clear();
+        app.apply_filter();
+    } else {
+        refresh_and_save(app).await;
+    }
+    let name = app
+        .active_connection()
+        .map_or("Unknown", |c| c.name.as_str())
+        .to_string();
+    app.selected = 0;
+    app.set_status(&format!("Switched to: {name}"));
+}
+
 #[derive(Parser)]
 #[command(name = "quay")]
 #[command(about = "A TUI port manager for local processes, SSH forwards, and Docker containers")]
@@ -219,7 +489,7 @@ async fn run_forward(spec: &str, host: &str, remote: bool) -> Result<()> {
 async fn run_kill(port: u16, pid: Option<u32>, remote_host: Option<&str>) -> Result<()> {
     if let Some(pid) = pid {
         println!("Killing process with PID: {pid}...");
-        port::kill_by_pid(pid, remote_host)?;
+        port::kill_by_pid(pid, remote_host).await?;
         println!("Done.");
     } else {
         println!("Killing process on port: {port}...");
@@ -262,12 +532,7 @@ pub(crate) async fn run_tui_with_entries(
     app.docker_target = docker_target;
 
     // Resolve container IP for docker target mode
-    if let Some(ref target) = app.docker_target {
-        match port::docker::get_container_ip(target, app.remote_host.as_deref()) {
-            Ok(ip) => app.container_ip = Some(ip),
-            Err(e) => app.set_status(&format!("Container IP lookup failed: {e}")),
-        }
-    }
+    resolve_container_ip(&mut app).await;
 
     // Apply config settings
     if !mock_mode {
@@ -333,14 +598,7 @@ pub(crate) async fn run_tui_with_entries(
         app.set_entries(entries);
         app.set_status("[mock] Loaded mock data");
     } else {
-        match port::collect_all(app.remote_host.as_deref(), app.docker_target.as_deref(), app.known_forwards()).await {
-            Ok(entries) => {
-                if app.set_entries(entries) {
-                    save_forwards(&mut app);
-                }
-            }
-            Err(e) => app.set_status(&format!("Load failed: {e}")),
-        }
+        refresh_and_save(&mut app).await;
     }
 
     // Event handler
@@ -365,113 +623,7 @@ pub(crate) async fn run_tui_with_entries(
                                 app.reset_forward_input();
                             }
                             Action::SubmitForward => {
-                                if mock_mode {
-                                    // In mock mode, add a fake SSH forward entry
-                                    if let Some((_, _)) = app.forward_input.to_spec() {
-                                        let local_port: u16 =
-                                            app.forward_input.local_port.parse().unwrap_or(0);
-                                        let mock_entry = PortEntry {
-                                            source: port::PortSource::Ssh,
-                                            local_port,
-                                            remote_host: Some(
-                                                app.forward_input.remote_host.clone(),
-                                            ),
-                                            remote_port: app.forward_input.remote_port.parse().ok(),
-                                            process_name: "ssh".to_string(),
-                                            pid: Some(99999),
-                                            container_id: None,
-                                            container_name: None,
-                                            ssh_host: Some(app.forward_input.ssh_host.clone()),
-                                            is_open: true,
-                                            is_loopback: false,
-                                            forwarded_port: None,
-                                        };
-                                        let mut entries = app.entries.clone();
-                                        entries.push(mock_entry);
-                                        entries.sort_by_key(|e| (!e.is_open, e.local_port));
-                                        app.set_entries(entries);
-                                        app.set_status("[mock] Forward created");
-                                    } else {
-                                        app.set_status("Invalid forward specification");
-                                    }
-                                } else if let Some((spec, host)) = app.forward_input.to_spec() {
-                                    let local_port: Option<u16> =
-                                        app.forward_input.local_port.parse().ok();
-                                    let already_listening = local_port
-                                        .is_some_and(forward::is_port_listening);
-
-                                    if already_listening {
-                                        // Port already in use — register mapping
-                                        // without creating a new forward
-                                        if app.is_docker_target() {
-                                            if let (Ok(rp), Ok(lp)) = (
-                                                app.forward_input.remote_port.parse::<u16>(),
-                                                app.forward_input.local_port.parse::<u16>(),
-                                            ) {
-                                                app.ssh_forwards
-                                                    .entry(app.active_connection)
-                                                    .or_default()
-                                                    .insert(rp, lp);
-                                                save_forwards(&mut app);
-                                            }
-                                        }
-                                        app.set_status("Forward already active, registered mapping");
-                                        if let Ok(entries) = port::collect_all(
-                                            app.remote_host.as_deref(),
-                                            app.docker_target.as_deref(),
-                                            app.known_forwards(),
-                                        )
-                                        .await
-                                        {
-                                            if app.set_entries(entries) {
-                                                save_forwards(&mut app);
-                                            }
-                                        }
-                                    } else {
-                                        match port::ssh::create_forward(&spec, &host, false) {
-                                            Ok(pid) => {
-                                                // Store forward mapping for Docker target mode
-                                                if app.is_docker_target() {
-                                                    if let (Ok(rp), Ok(lp)) = (
-                                                        app.forward_input
-                                                            .remote_port
-                                                            .parse::<u16>(),
-                                                        app.forward_input
-                                                            .local_port
-                                                            .parse::<u16>(),
-                                                    ) {
-                                                        app.ssh_forwards
-                                                            .entry(app.active_connection)
-                                                            .or_default()
-                                                            .insert(rp, lp);
-                                                        save_forwards(&mut app);
-                                                    }
-                                                }
-                                                app.set_status(&format!(
-                                                    "Forward created (PID: {pid})"
-                                                ));
-                                                if let Ok(entries) = port::collect_all(
-                                                    app.remote_host.as_deref(),
-                                                    app.docker_target.as_deref(),
-                                                    app.known_forwards(),
-                                                )
-                                                .await
-                                                {
-                                                    if app.set_entries(entries) {
-                                                        save_forwards(&mut app);
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                app.set_status(&format!("Forward failed: {e}"));
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    app.set_status("Invalid forward specification");
-                                }
-                                app.popup = Popup::None;
-                                app.reset_forward_input();
+                                handle_submit_forward(&mut app, mock_mode).await;
                             }
                             _ => {}
                         }
@@ -502,17 +654,7 @@ pub(crate) async fn run_tui_with_entries(
                                             app.set_status(&format!(
                                                 "Forward created (PID: {pid})"
                                             ));
-                                            if let Ok(entries) = port::collect_all(
-                                                app.remote_host.as_deref(),
-                                                app.docker_target.as_deref(),
-                                                app.known_forwards(),
-                                            )
-                                            .await
-                                            {
-                                                if app.set_entries(entries) {
-                                                    save_forwards(&mut app);
-                                                }
-                                            }
+                                            refresh_and_save(&mut app).await;
                                         }
                                         Err(e) => {
                                             app.set_status(&format!("Forward failed: {e}"));
@@ -569,32 +711,12 @@ pub(crate) async fn run_tui_with_entries(
                             Action::ActivateConnection => {
                                 app.active_connection = app.connection_selected;
                                 app.apply_connection();
-                                // Resolve container IP
-                                if let Some(ref target) = app.docker_target {
-                                    match port::docker::get_container_ip(
-                                        target,
-                                        app.remote_host.as_deref(),
-                                    ) {
-                                        Ok(ip) => app.container_ip = Some(ip),
-                                        Err(e) => app.set_status(&format!(
-                                            "Container IP lookup failed: {e}"
-                                        )),
-                                    }
-                                }
-                                // Re-collect ports
+                                resolve_container_ip(&mut app).await;
                                 if mock_mode {
                                     app.entries.clear();
                                     app.apply_filter();
-                                } else if let Ok(entries) = port::collect_all(
-                                    app.remote_host.as_deref(),
-                                    app.docker_target.as_deref(),
-                                    app.known_forwards(),
-                                )
-                                .await
-                                {
-                                    if app.set_entries(entries) {
-                                        save_forwards(&mut app);
-                                    }
+                                } else {
+                                    refresh_and_save(&mut app).await;
                                 }
                                 let name = app
                                     .active_connection()
@@ -689,24 +811,9 @@ pub(crate) async fn run_tui_with_entries(
                         Action::FilterSsh => app.set_filter(Filter::Ssh),
                         Action::FilterDocker => app.set_filter(Filter::Docker),
                         Action::Refresh => {
-                            if mock_mode {
-                                // no-op in mock mode
-                            } else {
-                                match port::collect_all(
-                                    app.remote_host.as_deref(),
-                                    app.docker_target.as_deref(),
-                                    app.known_forwards(),
-                                )
-                                .await
-                                {
-                                    Ok(entries) => {
-                                        if app.set_entries(entries) {
-                                            save_forwards(&mut app);
-                                        }
-                                        app.set_status("Refreshed");
-                                    }
-                                    Err(e) => app.set_status(&format!("Refresh failed: {e}")),
-                                }
+                            if !mock_mode {
+                                refresh_and_save(&mut app).await;
+                                app.set_status("Refreshed");
                             }
                         }
                         Action::ToggleAutoRefresh => {
@@ -720,98 +827,7 @@ pub(crate) async fn run_tui_with_entries(
                             }
                         }
                         Action::Kill => {
-                            if let Some(entry) = app.selected_entry() {
-                                let port = entry.local_port;
-                                let pid = entry.pid;
-                                let is_ssh = entry.source == port::PortSource::Ssh;
-                                if mock_mode {
-                                    // Remove entry from list in mock mode
-                                    let entries: Vec<_> = app
-                                        .entries
-                                        .iter()
-                                        .filter(|e| e.local_port != port)
-                                        .cloned()
-                                        .collect();
-                                    app.set_entries(entries);
-                                    app.set_status(&format!("[mock] Removed port {port}"));
-                                } else if app.is_docker_target() {
-                                    // Docker target mode: kill process inside container
-                                    if let Some(pid) = pid {
-                                        if let Some(ref target) = app.docker_target {
-                                            let kill_cmd =
-                                                format!("docker exec {target} kill {pid}");
-                                            let result = match app.remote_host.as_deref() {
-                                                Some(host) => std::process::Command::new("ssh")
-                                                    .arg(host)
-                                                    .arg(&kill_cmd)
-                                                    .status(),
-                                                None => std::process::Command::new("docker")
-                                                    .args([
-                                                        "exec",
-                                                        target,
-                                                        "kill",
-                                                        &pid.to_string(),
-                                                    ])
-                                                    .status(),
-                                            };
-                                            match result {
-                                                Ok(status) if status.success() => {
-                                                    app.set_status(&format!(
-                                                        "Killed PID {pid} in container"
-                                                    ));
-                                                    if let Ok(entries) = port::collect_all(
-                                                        app.remote_host.as_deref(),
-                                                        app.docker_target.as_deref(),
-                                                        app.known_forwards(),
-                                                    )
-                                                    .await
-                                                    {
-                                                        if app.set_entries(entries) {
-                                                            save_forwards(&mut app);
-                                                        }
-                                                    }
-                                                }
-                                                Ok(_) => app.set_status(&format!(
-                                                    "Kill failed for PID {pid} in container"
-                                                )),
-                                                Err(e) => {
-                                                    app.set_status(&format!("Kill failed: {e}"));
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        app.set_status("No PID available for this port (container ss doesn't report PIDs)");
-                                    }
-                                } else {
-                                    // SSH tunnels are always killed locally
-                                    let kill_host = if is_ssh {
-                                        None
-                                    } else {
-                                        app.remote_host.as_deref()
-                                    };
-                                    match port::kill_by_port(port, kill_host).await {
-                                        Ok(()) => {
-                                            app.set_status(&format!(
-                                                "Killed process on port {port}"
-                                            ));
-                                            if let Ok(entries) = port::collect_all(
-                                                app.remote_host.as_deref(),
-                                                app.docker_target.as_deref(),
-                                                app.known_forwards(),
-                                            )
-                                            .await
-                                            {
-                                                if app.set_entries(entries) {
-                                                    save_forwards(&mut app);
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            app.set_status(&format!("Kill failed: {e}"));
-                                        }
-                                    }
-                                }
-                            }
+                            handle_kill_action(&mut app, mock_mode).await;
                         }
                         Action::Select => {
                             app.popup = Popup::Details;
@@ -847,176 +863,13 @@ pub(crate) async fn run_tui_with_entries(
                             app.popup = Popup::None;
                         }
                         Action::QuickForward => {
-                            if let Some(entry) = app.selected_entry() {
-                                let port = entry.local_port;
-                                if let Some(host) = app.remote_host.clone() {
-                                    // In docker target mode, forward to container_ip
-                                    // In regular remote mode, forward to localhost on remote
-                                    let forward_target = if app.is_docker_target() {
-                                        if let Some(ip) = app.container_ip.as_deref() {
-                                            ip.to_string()
-                                        } else {
-                                            app.set_status("Container IP not available");
-                                            continue;
-                                        }
-                                    } else {
-                                        "localhost".to_string()
-                                    };
-                                    let spec = format!("{port}:{forward_target}:{port}");
-                                    if mock_mode {
-                                        let mock_entry = PortEntry {
-                                            source: port::PortSource::Ssh,
-                                            local_port: port,
-                                            remote_host: Some(forward_target.clone()),
-                                            remote_port: Some(port),
-                                            process_name: "ssh".to_string(),
-                                            pid: Some(99999),
-                                            container_id: None,
-                                            container_name: None,
-                                            ssh_host: Some(host.clone()),
-                                            is_open: true,
-                                            is_loopback: false,
-                                            forwarded_port: None,
-                                        };
-                                        let mut entries = app.entries.clone();
-                                        entries.push(mock_entry);
-                                        entries.sort_by_key(|e| (!e.is_open, e.local_port));
-                                        app.set_entries(entries);
-                                        app.set_status(&format!(
-                                            "[mock] Forward :{port} -> {host}:{port}"
-                                        ));
-                                    } else if forward::is_port_listening(port) {
-                                        // Port already forwarded — register mapping
-                                        app.ssh_forwards
-                                            .entry(app.active_connection)
-                                            .or_default()
-                                            .insert(port, port);
-                                        save_forwards(&mut app);
-                                        app.set_status("Forward already active, registered mapping");
-                                        if let Ok(entries) = port::collect_all(
-                                            app.remote_host.as_deref(),
-                                            app.docker_target.as_deref(),
-                                            app.known_forwards(),
-                                        )
-                                        .await
-                                        {
-                                            if app.set_entries(entries) {
-                                                save_forwards(&mut app);
-                                            }
-                                        }
-                                    } else {
-                                        match port::ssh::create_forward(&spec, &host, false) {
-                                            Ok(pid) => {
-                                                // Store forward mapping for Docker target mode
-                                                app.ssh_forwards
-                                                    .entry(app.active_connection)
-                                                    .or_default()
-                                                    .insert(port, port);
-                                                save_forwards(&mut app);
-                                                app.set_status(&format!(
-                                                    "Forward :{port} -> {host}:{port} (PID: {pid})"
-                                                ));
-                                                if let Ok(entries) = port::collect_all(
-                                                    app.remote_host.as_deref(),
-                                                    app.docker_target.as_deref(),
-                                                    app.known_forwards(),
-                                                )
-                                                .await
-                                                {
-                                                    if app.set_entries(entries) {
-                                                        save_forwards(&mut app);
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                app.set_status(&format!("Forward failed: {e}"));
-                                            }
-                                        }
-                                    }
-                                } else if app.is_docker_target() {
-                                    app.set_status(
-                                        "Quick Forward for local Docker not yet supported",
-                                    );
-                                } else {
-                                    app.set_status("Quick Forward requires --remote mode");
-                                }
-                            }
+                            handle_quick_forward(&mut app, mock_mode).await;
                         }
                         Action::PrevConnection => {
-                            if app.has_multiple_connections() {
-                                app.prev_connection();
-                                app.apply_connection();
-                                // Resolve container IP
-                                if let Some(ref target) = app.docker_target {
-                                    match port::docker::get_container_ip(
-                                        target,
-                                        app.remote_host.as_deref(),
-                                    ) {
-                                        Ok(ip) => app.container_ip = Some(ip),
-                                        Err(e) => app.set_status(&format!(
-                                            "Container IP lookup failed: {e}"
-                                        )),
-                                    }
-                                }
-                                if mock_mode {
-                                    app.entries.clear();
-                                    app.apply_filter();
-                                } else if let Ok(entries) = port::collect_all(
-                                    app.remote_host.as_deref(),
-                                    app.docker_target.as_deref(),
-                                    app.known_forwards(),
-                                )
-                                .await
-                                {
-                                    if app.set_entries(entries) {
-                                        save_forwards(&mut app);
-                                    }
-                                }
-                                let name = app
-                                    .active_connection()
-                                    .map_or("Unknown", |c| c.name.as_str())
-                                    .to_string();
-                                app.selected = 0;
-                                app.set_status(&format!("Switched to: {name}"));
-                            }
+                            handle_connection_switch(&mut app, -1, mock_mode).await;
                         }
                         Action::NextConnection => {
-                            if app.has_multiple_connections() {
-                                app.next_connection();
-                                app.apply_connection();
-                                // Resolve container IP
-                                if let Some(ref target) = app.docker_target {
-                                    match port::docker::get_container_ip(
-                                        target,
-                                        app.remote_host.as_deref(),
-                                    ) {
-                                        Ok(ip) => app.container_ip = Some(ip),
-                                        Err(e) => app.set_status(&format!(
-                                            "Container IP lookup failed: {e}"
-                                        )),
-                                    }
-                                }
-                                if mock_mode {
-                                    app.entries.clear();
-                                    app.apply_filter();
-                                } else if let Ok(entries) = port::collect_all(
-                                    app.remote_host.as_deref(),
-                                    app.docker_target.as_deref(),
-                                    app.known_forwards(),
-                                )
-                                .await
-                                {
-                                    if app.set_entries(entries) {
-                                        save_forwards(&mut app);
-                                    }
-                                }
-                                let name = app
-                                    .active_connection()
-                                    .map_or("Unknown", |c| c.name.as_str())
-                                    .to_string();
-                                app.selected = 0;
-                                app.set_status(&format!("Switched to: {name}"));
-                            }
+                            handle_connection_switch(&mut app, 1, mock_mode).await;
                         }
                         Action::ShowConnections => {
                             app.connection_selected = app.active_connection;
@@ -1061,20 +914,7 @@ pub(crate) async fn run_tui_with_entries(
             AppEvent::Tick => {
                 app.tick();
                 if !mock_mode && app.should_refresh() {
-                    match port::collect_all(
-                        app.remote_host.as_deref(),
-                        app.docker_target.as_deref(),
-                        app.known_forwards(),
-                    )
-                    .await
-                    {
-                        Ok(entries) => {
-                            if app.set_entries(entries) {
-                                save_forwards(&mut app);
-                            }
-                        }
-                        Err(e) => app.set_status(&format!("Auto-refresh failed: {e}")),
-                    }
+                    refresh_and_save(&mut app).await;
                 }
             }
         }

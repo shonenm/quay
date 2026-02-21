@@ -2,10 +2,28 @@ pub mod docker;
 pub mod local;
 pub mod ssh;
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::time::Duration;
 use tokio::net::TcpStream;
+
+const PROBE_TIMEOUT: Duration = Duration::from_millis(200);
+
+fn escape_ssh_args(args: &[&str]) -> String {
+    let escaped: Vec<String> = args
+        .iter()
+        .map(|a| shell_escape::escape(Cow::Borrowed(a)).to_string())
+        .collect();
+    escaped.join(" ")
+}
+
+/// Build a `tokio::process::Command` for SSH that safely escapes each argument.
+pub fn ssh_cmd_tokio(host: &str, args: &[&str]) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new("ssh");
+    cmd.arg(host).arg(escape_ssh_args(args));
+    cmd
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PortSource {
@@ -122,7 +140,7 @@ async fn probe_open_ports(entries: &mut [PortEntry], remote_mode: bool) {
         handles.push(tokio::spawn(async move {
             let addr = format!("127.0.0.1:{port}");
             let result =
-                tokio::time::timeout(Duration::from_millis(200), TcpStream::connect(&addr)).await;
+                tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect(&addr)).await;
             (port, result.is_ok() && result.unwrap().is_ok())
         }));
     }
@@ -179,7 +197,7 @@ pub async fn collect_all(
                 already_forwarded.insert(local_port);
             }
             let container_ports: HashSet<u16> = e.iter().map(|entry| entry.local_port).collect();
-            let ssh_ports: Vec<u16> = ssh::get_ssh_master_listening_ports(host)
+            let ssh_ports: Vec<u16> = ssh::get_ssh_master_listening_ports(host).await
                 .into_iter()
                 .filter(|p| !already_forwarded.contains(p))
                 .collect();
@@ -222,14 +240,14 @@ pub async fn collect_all(
     Ok(entries)
 }
 
-pub fn kill_by_pid(pid: u32, remote_host: Option<&str>) -> anyhow::Result<()> {
-    use std::process::Command;
+pub async fn kill_by_pid(pid: u32, remote_host: Option<&str>) -> anyhow::Result<()> {
+    let pid_str = pid.to_string();
     let status = match remote_host {
-        Some(host) => Command::new("ssh")
-            .arg(host)
-            .arg(format!("kill {pid}"))
-            .status()?,
-        None => Command::new("kill").arg(pid.to_string()).status()?,
+        Some(host) => ssh_cmd_tokio(host, &["kill", &pid_str]).status().await?,
+        None => tokio::process::Command::new("kill")
+            .arg(&pid_str)
+            .status()
+            .await?,
     };
     if status.success() {
         Ok(())
@@ -249,29 +267,30 @@ pub async fn kill_by_port(port: u16, remote_host: Option<&str>) -> anyhow::Resul
         PortSource::Ssh => {
             // SSH tunnel processes are always local
             if let Some(pid) = entry.pid {
-                kill_by_pid(pid, None)
+                kill_by_pid(pid, None).await
             } else {
                 anyhow::bail!("No PID found for port {port}")
             }
         }
         PortSource::Local => {
             if let Some(pid) = entry.pid {
-                kill_by_pid(pid, remote_host)
+                kill_by_pid(pid, remote_host).await
             } else {
                 anyhow::bail!("No PID found for port {port}")
             }
         }
         PortSource::Docker => {
             if let Some(ref container_id) = entry.container_id {
-                use std::process::Command;
                 let status = match remote_host {
-                    Some(host) => Command::new("ssh")
-                        .arg(host)
-                        .arg(format!("docker stop {container_id}"))
-                        .status()?,
-                    None => Command::new("docker")
+                    Some(host) => {
+                        ssh_cmd_tokio(host, &["docker", "stop", container_id])
+                            .status()
+                            .await?
+                    }
+                    None => tokio::process::Command::new("docker")
                         .args(["stop", container_id])
-                        .status()?,
+                        .status()
+                        .await?,
                 };
                 if status.success() {
                     Ok(())

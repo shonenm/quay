@@ -1,18 +1,22 @@
-use super::{PortEntry, PortSource};
+use super::{PortEntry, PortSource, ssh_cmd_tokio};
 use anyhow::Result;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
-use std::process::Command;
 use std::time::Duration;
+use tokio::process::Command;
 
-#[allow(clippy::unused_async)]
+const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+const TUNNEL_PROPAGATION_DELAY: Duration = Duration::from_millis(100);
+
 pub async fn collect(remote_host: Option<&str>) -> Result<Vec<PortEntry>> {
     let output = match remote_host {
         Some(host) => {
-            match Command::new("ssh")
-                .arg(host)
-                .arg(r"docker ps --format '{{.ID}}\t{{.Names}}\t{{.Ports}}'")
-                .output()
+            match ssh_cmd_tokio(
+                host,
+                &["docker", "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Ports}}"],
+            )
+            .output()
+            .await
             {
                 Ok(o) => o,
                 Err(_) => return Ok(Vec::new()),
@@ -22,6 +26,7 @@ pub async fn collect(remote_host: Option<&str>) -> Result<Vec<PortEntry>> {
             match Command::new("docker")
                 .args(["ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Ports}}"])
                 .output()
+                .await
             {
                 Ok(o) => o,
                 Err(_) => return Ok(Vec::new()), // Docker not installed
@@ -117,21 +122,25 @@ fn parse_docker_ps(output: &str, remote_mode: bool) -> Result<Vec<PortEntry>> {
 
 /// Collect LISTEN ports from inside a Docker container via `ss -tln`.
 /// When `remote_host` is Some, the command is run via SSH on the remote host.
-#[allow(clippy::unused_async)]
 pub async fn collect_from_container(
     container: &str,
     remote_host: Option<&str>,
 ) -> Result<Vec<PortEntry>> {
-    let docker_cmd = format!("docker exec {container} ss -tln");
     let output = match remote_host {
-        Some(host) => match Command::new("ssh").arg(host).arg(&docker_cmd).output() {
-            Ok(o) => o,
-            Err(e) => anyhow::bail!("Failed to run ss in container via SSH: {e}"),
-        },
+        Some(host) => {
+            match ssh_cmd_tokio(host, &["docker", "exec", container, "ss", "-tln"])
+                .output()
+                .await
+            {
+                Ok(o) => o,
+                Err(e) => anyhow::bail!("Failed to run ss in container via SSH: {e}"),
+            }
+        }
         None => {
             match Command::new("docker")
                 .args(["exec", container, "ss", "-tln"])
                 .output()
+                .await
             {
                 Ok(o) => o,
                 Err(e) => anyhow::bail!("Failed to run ss in container: {e}"),
@@ -239,16 +248,18 @@ fn parse_ss_output(output: &str, container_name: &str) -> Vec<PortEntry> {
 
 /// Get the IP address of a Docker container.
 /// Uses `docker inspect` to retrieve the container's IP from its network settings.
-pub fn get_container_ip(container: &str, remote_host: Option<&str>) -> Result<String> {
+pub async fn get_container_ip(container: &str, remote_host: Option<&str>) -> Result<String> {
     let inspect_fmt = "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}";
     let output = match remote_host {
         Some(host) => {
-            let cmd = format!("docker inspect -f '{inspect_fmt}' {container}");
-            Command::new("ssh").arg(host).arg(&cmd).output()?
+            ssh_cmd_tokio(host, &["docker", "inspect", "-f", inspect_fmt, container])
+                .output()
+                .await?
         }
         None => Command::new("docker")
             .args(["inspect", "-f", inspect_fmt, container])
-            .output()?,
+            .output()
+            .await?,
     };
 
     if !output.status.success() {
@@ -316,15 +327,16 @@ fn parse_ss_peer_port_counts(output: &str) -> HashMap<u16, usize> {
 ///
 /// Checks from the host side because SSH tunnel connections may not be
 /// visible inside the container's network namespace.
-fn get_host_to_container_port_counts(
+async fn get_host_to_container_port_counts(
     container_ip: &str,
     remote_host: &str,
 ) -> Result<HashMap<u16, usize>> {
-    let ss_cmd = format!("ss -tn state established dst {container_ip}");
-    let output = Command::new("ssh")
-        .arg(remote_host)
-        .arg(&ss_cmd)
-        .output()?;
+    let output = ssh_cmd_tokio(
+        remote_host,
+        &["ss", "-tn", "state", "established", "dst", container_ip],
+    )
+    .output()
+    .await?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(parse_ss_peer_port_counts(&stdout))
@@ -344,18 +356,18 @@ pub async fn detect_forward_mappings(
     ssh_ports: &[u16],
     container_ports: &HashSet<u16>,
 ) -> Result<HashMap<u16, u16>> {
-    let container_ip = get_container_ip(container, Some(remote_host))?;
+    let container_ip = get_container_ip(container, Some(remote_host)).await?;
     let mut result: HashMap<u16, u16> = HashMap::new();
     let mut detected_container_ports: HashSet<u16> = HashSet::new();
 
     // Get baseline established connection counts (host → container)
-    let baseline = get_host_to_container_port_counts(&container_ip, remote_host)?;
+    let baseline = get_host_to_container_port_counts(&container_ip, remote_host).await?;
 
     for &ssh_port in ssh_ports {
         // Connect to the SSH tunnel local port
         let addr = format!("127.0.0.1:{ssh_port}");
         let connect_result = tokio::time::timeout(
-            Duration::from_millis(500),
+            TUNNEL_CONNECT_TIMEOUT,
             tokio::net::TcpStream::connect(&addr),
         )
         .await;
@@ -365,10 +377,11 @@ pub async fn detect_forward_mappings(
         };
 
         // Wait for the connection to propagate through SSH tunnel
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(TUNNEL_PROPAGATION_DELAY).await;
 
         // Get current established connection counts (host → container)
-        let Ok(current) = get_host_to_container_port_counts(&container_ip, remote_host) else {
+        let Ok(current) = get_host_to_container_port_counts(&container_ip, remote_host).await
+        else {
             continue;
         };
 
@@ -391,7 +404,7 @@ pub async fn detect_forward_mappings(
 
         // Drop the connection and wait for cleanup
         drop(stream);
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(TUNNEL_PROPAGATION_DELAY).await;
     }
 
     Ok(result)

@@ -2,14 +2,13 @@ use super::{PortEntry, PortSource};
 use anyhow::Result;
 use regex::Regex;
 use std::collections::HashSet;
-use std::process::Command;
 
 /// Create an SSH port forward
 /// spec format: "`local_port:remote_host:remote_port`"
 pub fn create_forward(spec: &str, host: &str, remote: bool) -> Result<u32> {
     let flag = if remote { "-R" } else { "-L" };
 
-    let child = Command::new("ssh")
+    let child = std::process::Command::new("ssh")
         .args(["-f", "-N", flag, spec, host])
         .spawn()?;
 
@@ -20,7 +19,7 @@ pub fn create_forward(spec: &str, host: &str, remote: bool) -> Result<u32> {
 ///
 /// Runs `ssh -O check host` and parses "Master running (pid=NNNNN)" from stderr.
 fn get_control_master_pid(host: &str) -> Option<u32> {
-    let output = Command::new("ssh")
+    let output = std::process::Command::new("ssh")
         .args(["-O", "check", host])
         .output()
         .ok()?;
@@ -32,7 +31,7 @@ fn get_control_master_pid(host: &str) -> Option<u32> {
 /// Get TCP LISTEN ports for a specific PID via `lsof`.
 fn get_listening_ports_for_pid(pid: u32) -> Vec<u16> {
     let pid_str = pid.to_string();
-    let output = match Command::new("lsof")
+    let output = match std::process::Command::new("lsof")
         .args(["-a", "-P", "-n", "-iTCP", "-sTCP:LISTEN", "-p", &pid_str, "-Fn"])
         .output()
     {
@@ -47,11 +46,16 @@ fn get_listening_ports_for_pid(pid: u32) -> Vec<u16> {
 ///
 /// Uses `ssh -O check` to find the `ControlMaster` PID, then queries
 /// only that PID's TCP LISTEN sockets via `lsof -a -p PID`.
-pub fn get_ssh_master_listening_ports(remote_host: &str) -> Vec<u16> {
-    let Some(pid) = get_control_master_pid(remote_host) else {
-        return Vec::new();
-    };
-    get_listening_ports_for_pid(pid)
+pub async fn get_ssh_master_listening_ports(remote_host: &str) -> Vec<u16> {
+    let host = remote_host.to_string();
+    tokio::task::spawn_blocking(move || {
+        let Some(pid) = get_control_master_pid(&host) else {
+            return Vec::new();
+        };
+        get_listening_ports_for_pid(pid)
+    })
+    .await
+    .unwrap_or_default()
 }
 
 fn parse_lsof_listen_ports(output: &str) -> Vec<u16> {
@@ -76,9 +80,11 @@ fn parse_lsof_listen_ports(output: &str) -> Vec<u16> {
     result
 }
 
-#[allow(clippy::unused_async)]
 pub async fn collect() -> Result<Vec<PortEntry>> {
-    let output = Command::new("ps").args(["aux"]).output()?;
+    let output = tokio::process::Command::new("ps")
+        .args(["aux"])
+        .output()
+        .await?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     parse_ssh_forwards(&stdout)

@@ -38,6 +38,7 @@ clap = { version = "4", features = ["derive"] }
 # Utilities
 chrono = "0.4"
 regex = "1"
+shell-escape = "0.1"
 
 # Config
 toml = "0.8"

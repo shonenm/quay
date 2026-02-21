@@ -1,17 +1,18 @@
-use super::{PortEntry, PortSource};
+use super::{PortEntry, PortSource, ssh_cmd_tokio};
 use anyhow::Result;
-use std::process::Command;
+use tokio::process::Command;
 
-#[allow(clippy::unused_async)]
 pub async fn collect(remote_host: Option<&str>) -> Result<Vec<PortEntry>> {
     let output = match remote_host {
-        Some(host) => Command::new("ssh")
-            .arg(host)
-            .arg("lsof -i -P -n -sTCP:LISTEN -Fcpn")
-            .output()?,
+        Some(host) => {
+            ssh_cmd_tokio(host, &["lsof", "-i", "-P", "-n", "-sTCP:LISTEN", "-Fcpn"])
+                .output()
+                .await?
+        }
         None => Command::new("lsof")
             .args(["-i", "-P", "-n", "-sTCP:LISTEN", "-Fcpn"])
-            .output()?,
+            .output()
+            .await?,
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
