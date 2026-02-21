@@ -1,8 +1,9 @@
 use super::{PortEntry, PortSource};
 use anyhow::Result;
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
+use std::time::Duration;
 
 #[allow(clippy::unused_async)]
 pub async fn collect(remote_host: Option<&str>) -> Result<Vec<PortEntry>> {
@@ -266,6 +267,136 @@ pub fn get_container_ip(container: &str, remote_host: Option<&str>) -> Result<St
     Ok(ip)
 }
 
+/// Parse `ss -tn state established dst IP` output to count connections per peer port.
+///
+/// The peer port corresponds to the container port that received the connection.
+/// Uses counts instead of a set to handle ports with existing connections.
+fn parse_ss_peer_port_counts(output: &str) -> HashMap<u16, usize> {
+    let mut counts = HashMap::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with("State")
+            || trimmed.starts_with("Recv-Q")
+            || trimmed.starts_with("LISTEN")
+        {
+            continue;
+        }
+
+        // Fields: [Recv-Q, Send-Q, Local Address:Port, Peer Address:Port, ...]
+        // or with State column: [State, Recv-Q, Send-Q, Local Address:Port, Peer Address:Port, ...]
+        let fields: Vec<&str> = trimmed.split_whitespace().collect();
+        let peer_addr = if fields.len() >= 4 {
+            if fields[0].parse::<u32>().is_ok() {
+                // Starts with number → no State column → peer is field 3
+                fields.get(3)
+            } else {
+                // Starts with text → has State column → peer is field 4
+                fields.get(4)
+            }
+        } else {
+            None
+        };
+
+        if let Some(addr) = peer_addr {
+            if let Some(port_str) = addr.rsplit(':').next() {
+                if let Ok(port) = port_str.parse::<u16>() {
+                    if port > 0 {
+                        *counts.entry(port).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+    counts
+}
+
+/// Run `ss -tn state established dst <container_ip>` on the remote host
+/// and return peer (container) port counts.
+///
+/// Checks from the host side because SSH tunnel connections may not be
+/// visible inside the container's network namespace.
+fn get_host_to_container_port_counts(
+    container_ip: &str,
+    remote_host: &str,
+) -> Result<HashMap<u16, usize>> {
+    let ss_cmd = format!("ss -tn state established dst {container_ip}");
+    let output = Command::new("ssh")
+        .arg(remote_host)
+        .arg(&ss_cmd)
+        .output()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_ss_peer_port_counts(&stdout))
+}
+
+/// Detect SSH forward mappings by probing each SSH-owned local port.
+///
+/// For each SSH port, connects to `127.0.0.1:{ssh_port}`, then checks
+/// which container port's connection count increased on the remote host via
+/// `ss -tn state established dst <container_ip>`. Uses counts (not sets)
+/// to handle ports that already have existing connections.
+///
+/// Returns a map of `container_port → local_port`.
+pub async fn detect_forward_mappings(
+    container: &str,
+    remote_host: &str,
+    ssh_ports: &[u16],
+    container_ports: &HashSet<u16>,
+) -> Result<HashMap<u16, u16>> {
+    let container_ip = get_container_ip(container, Some(remote_host))?;
+    let mut result: HashMap<u16, u16> = HashMap::new();
+    let mut detected_container_ports: HashSet<u16> = HashSet::new();
+
+    // Get baseline established connection counts (host → container)
+    let baseline = get_host_to_container_port_counts(&container_ip, remote_host)?;
+
+    for &ssh_port in ssh_ports {
+        // Connect to the SSH tunnel local port
+        let addr = format!("127.0.0.1:{ssh_port}");
+        let connect_result = tokio::time::timeout(
+            Duration::from_millis(500),
+            tokio::net::TcpStream::connect(&addr),
+        )
+        .await;
+
+        let Ok(Ok(stream)) = connect_result else {
+            continue; // Port not connectable (e.g. SOCKS proxy or dead tunnel)
+        };
+
+        // Wait for the connection to propagate through SSH tunnel
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // Get current established connection counts (host → container)
+        let Ok(current) = get_host_to_container_port_counts(&container_ip, remote_host) else {
+            continue;
+        };
+
+        // Find container ports where connection count increased
+        let new_ports: Vec<u16> = current
+            .iter()
+            .filter(|(&port, &count)| {
+                count > baseline.get(&port).copied().unwrap_or(0)
+                    && container_ports.contains(&port)
+                    && !detected_container_ports.contains(&port)
+            })
+            .map(|(&port, _)| port)
+            .collect();
+
+        if new_ports.len() == 1 {
+            let container_port = new_ports[0];
+            result.insert(container_port, ssh_port);
+            detected_container_ports.insert(container_port);
+        }
+
+        // Drop the connection and wait for cleanup
+        drop(stream);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,5 +552,52 @@ LISTEN 0      511     0.0.0.0:5173        0.0.0.0:*
         let output = "State  Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process\n";
         let entries = parse_ss_output(output, "test");
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ss_peer_port_counts() {
+        // ss -tn state established dst 172.28.0.2 on host:
+        // Local is host side, Peer is container side
+        let output = "\
+Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process
+0      0       172.28.0.1:32870     172.28.0.2:1234
+0      0       172.28.0.1:45678     172.28.0.2:3000
+";
+        let counts = parse_ss_peer_port_counts(output);
+        assert_eq!(counts.get(&1234), Some(&1));
+        assert_eq!(counts.get(&3000), Some(&1));
+        assert_eq!(counts.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_ss_peer_port_counts_with_state_column() {
+        let output = "\
+State  Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process
+ESTAB  0      0       172.28.0.1:32870     172.28.0.2:1234
+";
+        let counts = parse_ss_peer_port_counts(output);
+        assert_eq!(counts.get(&1234), Some(&1));
+        assert_eq!(counts.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_ss_peer_port_counts_empty() {
+        let output = "Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process\n";
+        let counts = parse_ss_peer_port_counts(output);
+        assert!(counts.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ss_peer_port_counts_multiple_connections() {
+        // Two connections to same container port (1234), one to port 3000
+        let output = "\
+Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process
+0      0       172.28.0.1:32870     172.28.0.2:1234
+0      0       172.28.0.1:32871     172.28.0.2:1234
+0      0       172.28.0.1:45678     172.28.0.2:3000
+";
+        let counts = parse_ss_peer_port_counts(output);
+        assert_eq!(counts.get(&1234), Some(&2));
+        assert_eq!(counts.get(&3000), Some(&1));
     }
 }

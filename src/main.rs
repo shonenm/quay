@@ -2,6 +2,7 @@ mod app;
 mod config;
 mod connection;
 mod dev;
+mod forward;
 mod event;
 mod port;
 mod preset;
@@ -22,8 +23,16 @@ use event::{
 };
 use port::PortEntry;
 use ratatui::prelude::*;
+use std::collections::HashMap;
 use std::io::{self, stdout};
 use std::time::Duration;
+
+fn save_forwards(app: &mut app::App) {
+    let persisted = forward::Forwards::from_runtime(&app.ssh_forwards, &app.connections);
+    if let Err(e) = persisted.save() {
+        app.set_status(&format!("Forward save failed: {e}"));
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "quay")]
@@ -126,7 +135,7 @@ async fn run_list(
     remote_host: Option<&str>,
     docker_target: Option<&str>,
 ) -> Result<()> {
-    let entries = port::collect_all(remote_host, docker_target).await?;
+    let entries = port::collect_all(remote_host, docker_target, &HashMap::new()).await?;
 
     let filtered: Vec<_> = entries
         .into_iter()
@@ -171,11 +180,16 @@ async fn run_list(
         println!("{}", "-".repeat(66));
         for entry in filtered {
             let open_indicator = if entry.is_open { "●" } else { "○" };
+            let local_display = if let Some(fwd) = entry.forwarded_port {
+                format!(":{}→:{}", entry.local_port, fwd)
+            } else {
+                format!(":{}", entry.local_port)
+            };
             println!(
-                "{:<8} {:<6} :{:<7} {:<20} {}",
+                "{:<8} {:<6} {:<14} {:<20} {}",
                 entry.source,
                 open_indicator,
-                entry.local_port,
+                local_display,
                 entry.remote_display(),
                 entry.process_display()
             );
@@ -305,13 +319,26 @@ pub(crate) async fn run_tui_with_entries(
         }
     }
 
+    // Load persisted forward mappings
+    if !mock_mode {
+        let mut stored_forwards = forward::Forwards::load();
+        if stored_forwards.remove_stale() {
+            let _ = stored_forwards.save();
+        }
+        app.ssh_forwards = stored_forwards.to_runtime(&app.connections);
+    }
+
     // Load initial data
     if let Some(entries) = initial {
         app.set_entries(entries);
         app.set_status("[mock] Loaded mock data");
     } else {
-        match port::collect_all(app.remote_host.as_deref(), app.docker_target.as_deref()).await {
-            Ok(entries) => app.set_entries(entries),
+        match port::collect_all(app.remote_host.as_deref(), app.docker_target.as_deref(), app.known_forwards()).await {
+            Ok(entries) => {
+                if app.set_entries(entries) {
+                    save_forwards(&mut app);
+                }
+            }
             Err(e) => app.set_status(&format!("Load failed: {e}")),
         }
     }
@@ -368,34 +395,76 @@ pub(crate) async fn run_tui_with_entries(
                                         app.set_status("Invalid forward specification");
                                     }
                                 } else if let Some((spec, host)) = app.forward_input.to_spec() {
-                                    match port::ssh::create_forward(&spec, &host, false) {
-                                        Ok(pid) => {
-                                            // Store forward mapping for Docker target mode
-                                            if app.is_docker_target() {
-                                                if let (Ok(rp), Ok(lp)) = (
-                                                    app.forward_input.remote_port.parse::<u16>(),
-                                                    app.forward_input.local_port.parse::<u16>(),
-                                                ) {
-                                                    app.ssh_forwards
-                                                        .entry(app.active_connection)
-                                                        .or_default()
-                                                        .insert(rp, lp);
-                                                }
-                                            }
-                                            app.set_status(&format!(
-                                                "Forward created (PID: {pid})"
-                                            ));
-                                            if let Ok(entries) = port::collect_all(
-                                                app.remote_host.as_deref(),
-                                                app.docker_target.as_deref(),
-                                            )
-                                            .await
-                                            {
-                                                app.set_entries(entries);
+                                    let local_port: Option<u16> =
+                                        app.forward_input.local_port.parse().ok();
+                                    let already_listening = local_port
+                                        .is_some_and(forward::is_port_listening);
+
+                                    if already_listening {
+                                        // Port already in use — register mapping
+                                        // without creating a new forward
+                                        if app.is_docker_target() {
+                                            if let (Ok(rp), Ok(lp)) = (
+                                                app.forward_input.remote_port.parse::<u16>(),
+                                                app.forward_input.local_port.parse::<u16>(),
+                                            ) {
+                                                app.ssh_forwards
+                                                    .entry(app.active_connection)
+                                                    .or_default()
+                                                    .insert(rp, lp);
+                                                save_forwards(&mut app);
                                             }
                                         }
-                                        Err(e) => {
-                                            app.set_status(&format!("Forward failed: {e}"));
+                                        app.set_status("Forward already active, registered mapping");
+                                        if let Ok(entries) = port::collect_all(
+                                            app.remote_host.as_deref(),
+                                            app.docker_target.as_deref(),
+                                            app.known_forwards(),
+                                        )
+                                        .await
+                                        {
+                                            if app.set_entries(entries) {
+                                                save_forwards(&mut app);
+                                            }
+                                        }
+                                    } else {
+                                        match port::ssh::create_forward(&spec, &host, false) {
+                                            Ok(pid) => {
+                                                // Store forward mapping for Docker target mode
+                                                if app.is_docker_target() {
+                                                    if let (Ok(rp), Ok(lp)) = (
+                                                        app.forward_input
+                                                            .remote_port
+                                                            .parse::<u16>(),
+                                                        app.forward_input
+                                                            .local_port
+                                                            .parse::<u16>(),
+                                                    ) {
+                                                        app.ssh_forwards
+                                                            .entry(app.active_connection)
+                                                            .or_default()
+                                                            .insert(rp, lp);
+                                                        save_forwards(&mut app);
+                                                    }
+                                                }
+                                                app.set_status(&format!(
+                                                    "Forward created (PID: {pid})"
+                                                ));
+                                                if let Ok(entries) = port::collect_all(
+                                                    app.remote_host.as_deref(),
+                                                    app.docker_target.as_deref(),
+                                                    app.known_forwards(),
+                                                )
+                                                .await
+                                                {
+                                                    if app.set_entries(entries) {
+                                                        save_forwards(&mut app);
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                app.set_status(&format!("Forward failed: {e}"));
+                                            }
                                         }
                                     }
                                 } else {
@@ -436,10 +505,13 @@ pub(crate) async fn run_tui_with_entries(
                                             if let Ok(entries) = port::collect_all(
                                                 app.remote_host.as_deref(),
                                                 app.docker_target.as_deref(),
+                                                app.known_forwards(),
                                             )
                                             .await
                                             {
-                                                app.set_entries(entries);
+                                                if app.set_entries(entries) {
+                                                    save_forwards(&mut app);
+                                                }
                                             }
                                         }
                                         Err(e) => {
@@ -516,10 +588,13 @@ pub(crate) async fn run_tui_with_entries(
                                 } else if let Ok(entries) = port::collect_all(
                                     app.remote_host.as_deref(),
                                     app.docker_target.as_deref(),
+                                    app.known_forwards(),
                                 )
                                 .await
                                 {
-                                    app.set_entries(entries);
+                                    if app.set_entries(entries) {
+                                        save_forwards(&mut app);
+                                    }
                                 }
                                 let name = app
                                     .active_connection()
@@ -620,11 +695,14 @@ pub(crate) async fn run_tui_with_entries(
                                 match port::collect_all(
                                     app.remote_host.as_deref(),
                                     app.docker_target.as_deref(),
+                                    app.known_forwards(),
                                 )
                                 .await
                                 {
                                     Ok(entries) => {
-                                        app.set_entries(entries);
+                                        if app.set_entries(entries) {
+                                            save_forwards(&mut app);
+                                        }
                                         app.set_status("Refreshed");
                                     }
                                     Err(e) => app.set_status(&format!("Refresh failed: {e}")),
@@ -684,10 +762,13 @@ pub(crate) async fn run_tui_with_entries(
                                                     if let Ok(entries) = port::collect_all(
                                                         app.remote_host.as_deref(),
                                                         app.docker_target.as_deref(),
+                                                        app.known_forwards(),
                                                     )
                                                     .await
                                                     {
-                                                        app.set_entries(entries);
+                                                        if app.set_entries(entries) {
+                                                            save_forwards(&mut app);
+                                                        }
                                                     }
                                                 }
                                                 Ok(_) => app.set_status(&format!(
@@ -716,10 +797,13 @@ pub(crate) async fn run_tui_with_entries(
                                             if let Ok(entries) = port::collect_all(
                                                 app.remote_host.as_deref(),
                                                 app.docker_target.as_deref(),
+                                                app.known_forwards(),
                                             )
                                             .await
                                             {
-                                                app.set_entries(entries);
+                                                if app.set_entries(entries) {
+                                                    save_forwards(&mut app);
+                                                }
                                             }
                                         }
                                         Err(e) => {
@@ -801,6 +885,25 @@ pub(crate) async fn run_tui_with_entries(
                                         app.set_status(&format!(
                                             "[mock] Forward :{port} -> {host}:{port}"
                                         ));
+                                    } else if forward::is_port_listening(port) {
+                                        // Port already forwarded — register mapping
+                                        app.ssh_forwards
+                                            .entry(app.active_connection)
+                                            .or_default()
+                                            .insert(port, port);
+                                        save_forwards(&mut app);
+                                        app.set_status("Forward already active, registered mapping");
+                                        if let Ok(entries) = port::collect_all(
+                                            app.remote_host.as_deref(),
+                                            app.docker_target.as_deref(),
+                                            app.known_forwards(),
+                                        )
+                                        .await
+                                        {
+                                            if app.set_entries(entries) {
+                                                save_forwards(&mut app);
+                                            }
+                                        }
                                     } else {
                                         match port::ssh::create_forward(&spec, &host, false) {
                                             Ok(pid) => {
@@ -809,16 +912,20 @@ pub(crate) async fn run_tui_with_entries(
                                                     .entry(app.active_connection)
                                                     .or_default()
                                                     .insert(port, port);
+                                                save_forwards(&mut app);
                                                 app.set_status(&format!(
                                                     "Forward :{port} -> {host}:{port} (PID: {pid})"
                                                 ));
                                                 if let Ok(entries) = port::collect_all(
                                                     app.remote_host.as_deref(),
                                                     app.docker_target.as_deref(),
+                                                    app.known_forwards(),
                                                 )
                                                 .await
                                                 {
-                                                    app.set_entries(entries);
+                                                    if app.set_entries(entries) {
+                                                        save_forwards(&mut app);
+                                                    }
                                                 }
                                             }
                                             Err(e) => {
@@ -857,10 +964,13 @@ pub(crate) async fn run_tui_with_entries(
                                 } else if let Ok(entries) = port::collect_all(
                                     app.remote_host.as_deref(),
                                     app.docker_target.as_deref(),
+                                    app.known_forwards(),
                                 )
                                 .await
                                 {
-                                    app.set_entries(entries);
+                                    if app.set_entries(entries) {
+                                        save_forwards(&mut app);
+                                    }
                                 }
                                 let name = app
                                     .active_connection()
@@ -892,10 +1002,13 @@ pub(crate) async fn run_tui_with_entries(
                                 } else if let Ok(entries) = port::collect_all(
                                     app.remote_host.as_deref(),
                                     app.docker_target.as_deref(),
+                                    app.known_forwards(),
                                 )
                                 .await
                                 {
-                                    app.set_entries(entries);
+                                    if app.set_entries(entries) {
+                                        save_forwards(&mut app);
+                                    }
                                 }
                                 let name = app
                                     .active_connection()
@@ -951,10 +1064,15 @@ pub(crate) async fn run_tui_with_entries(
                     match port::collect_all(
                         app.remote_host.as_deref(),
                         app.docker_target.as_deref(),
+                        app.known_forwards(),
                     )
                     .await
                     {
-                        Ok(entries) => app.set_entries(entries),
+                        Ok(entries) => {
+                            if app.set_entries(entries) {
+                                save_forwards(&mut app);
+                            }
+                        }
                         Err(e) => app.set_status(&format!("Auto-refresh failed: {e}")),
                     }
                 }

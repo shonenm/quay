@@ -145,6 +145,7 @@ async fn probe_open_ports(entries: &mut [PortEntry], remote_mode: bool) {
 pub async fn collect_all(
     remote_host: Option<&str>,
     docker_target: Option<&str>,
+    known_forwards: &HashMap<u16, u16>,
 ) -> anyhow::Result<Vec<PortEntry>> {
     let mut entries = if let Some(container) = docker_target {
         // Docker target mode: only collect from inside the specified container
@@ -152,7 +153,7 @@ pub async fn collect_all(
         for entry in &mut e {
             entry.is_open = false;
         }
-        if remote_host.is_some() {
+        if let Some(host) = remote_host {
             // Remote: SSH tunnel detection only (probe would false-positive)
             if let Ok(ssh_entries) = ssh::collect().await {
                 let ssh_port_map: HashMap<u16, u16> = ssh_entries
@@ -163,6 +164,47 @@ pub async fn collect_all(
                     if let Some(&tunnel_local) = ssh_port_map.get(&entry.local_port) {
                         entry.is_open = true;
                         entry.forwarded_port = Some(tunnel_local);
+                    }
+                }
+            }
+
+            // Fallback: detect ControlMaster-managed tunnels via lsof + probe
+            let mut already_forwarded: HashSet<u16> = e
+                .iter()
+                .filter(|entry| entry.forwarded_port.is_some())
+                .filter_map(|entry| entry.forwarded_port)
+                .collect();
+            // Skip probing for already-known (persisted) forwards
+            for &local_port in known_forwards.values() {
+                already_forwarded.insert(local_port);
+            }
+            let container_ports: HashSet<u16> = e.iter().map(|entry| entry.local_port).collect();
+            let ssh_ports: Vec<u16> = ssh::get_ssh_master_listening_ports(host)
+                .into_iter()
+                .filter(|p| !already_forwarded.contains(p))
+                .collect();
+            if !ssh_ports.is_empty() {
+                if let Ok(mappings) =
+                    docker::detect_forward_mappings(container, host, &ssh_ports, &container_ports)
+                        .await
+                {
+                    for entry in &mut e {
+                        if !entry.is_open {
+                            if let Some(&local_port) = mappings.get(&entry.local_port) {
+                                entry.is_open = true;
+                                entry.forwarded_port = Some(local_port);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Apply known forwards as fallback for entries not detected above
+            for entry in &mut e {
+                if !entry.is_open {
+                    if let Some(&local_port) = known_forwards.get(&entry.local_port) {
+                        entry.is_open = true;
+                        entry.forwarded_port = Some(local_port);
                     }
                 }
             }

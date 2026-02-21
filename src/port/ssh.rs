@@ -1,6 +1,7 @@
 use super::{PortEntry, PortSource};
 use anyhow::Result;
 use regex::Regex;
+use std::collections::HashSet;
 use std::process::Command;
 
 /// Create an SSH port forward
@@ -13,6 +14,66 @@ pub fn create_forward(spec: &str, host: &str, remote: bool) -> Result<u32> {
         .spawn()?;
 
     Ok(child.id())
+}
+
+/// Get the PID of the SSH `ControlMaster` for a given remote host.
+///
+/// Runs `ssh -O check host` and parses "Master running (pid=NNNNN)" from stderr.
+fn get_control_master_pid(host: &str) -> Option<u32> {
+    let output = Command::new("ssh")
+        .args(["-O", "check", host])
+        .output()
+        .ok()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let re = Regex::new(r"pid=(\d+)").ok()?;
+    re.captures(&stderr)?[1].parse().ok()
+}
+
+/// Get TCP LISTEN ports for a specific PID via `lsof`.
+fn get_listening_ports_for_pid(pid: u32) -> Vec<u16> {
+    let pid_str = pid.to_string();
+    let output = match Command::new("lsof")
+        .args(["-a", "-P", "-n", "-iTCP", "-sTCP:LISTEN", "-p", &pid_str, "-Fn"])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_lsof_listen_ports(&stdout)
+}
+
+/// Detect LISTEN ports owned by the SSH `ControlMaster` for a specific host.
+///
+/// Uses `ssh -O check` to find the `ControlMaster` PID, then queries
+/// only that PID's TCP LISTEN sockets via `lsof -a -p PID`.
+pub fn get_ssh_master_listening_ports(remote_host: &str) -> Vec<u16> {
+    let Some(pid) = get_control_master_pid(remote_host) else {
+        return Vec::new();
+    };
+    get_listening_ports_for_pid(pid)
+}
+
+fn parse_lsof_listen_ports(output: &str) -> Vec<u16> {
+    let mut ports = HashSet::new();
+
+    for line in output.lines() {
+        // lsof -F format: lines starting with 'n' contain network addresses
+        // e.g. "n*:1235" or "n127.0.0.1:1235" or "n[::1]:1235"
+        if let Some(addr) = line.strip_prefix('n') {
+            if let Some(port_str) = addr.rsplit(':').next() {
+                if let Ok(port) = port_str.parse::<u16>() {
+                    if port > 0 {
+                        ports.insert(port);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut result: Vec<u16> = ports.into_iter().collect();
+    result.sort_unstable();
+    result
 }
 
 #[allow(clippy::unused_async)]
@@ -197,5 +258,33 @@ mod tests {
         let line =
             "user  12345  0.0  0.1 123456 7890 ?  Ss  10:00  0:00 ssh -L 9000:localhost:80 -N";
         assert_eq!(extract_ssh_host(line), None);
+    }
+
+    #[test]
+    fn test_parse_lsof_listen_ports() {
+        let output = "n*:1235\nn*:3108\nn[::1]:1235\nn127.0.0.1:4201\n";
+        let ports = parse_lsof_listen_ports(output);
+        assert_eq!(ports, vec![1235, 3108, 4201]);
+    }
+
+    #[test]
+    fn test_parse_lsof_listen_ports_empty() {
+        let ports = parse_lsof_listen_ports("");
+        assert!(ports.is_empty());
+    }
+
+    #[test]
+    fn test_parse_lsof_listen_ports_no_network_lines() {
+        let output = "fINET\n";
+        let ports = parse_lsof_listen_ports(output);
+        assert!(ports.is_empty());
+    }
+
+    #[test]
+    fn test_parse_lsof_skips_non_port_entries() {
+        // Simulates lsof output with unix sockets, device files, etc.
+        let output = "n/dev/ttys021\nn/Users/test/.ssh/sockets/user@host\nn*:1235\nn->0xabcdef\nn127.0.0.1:3108\n";
+        let ports = parse_lsof_listen_ports(output);
+        assert_eq!(ports, vec![1235, 3108]);
     }
 }

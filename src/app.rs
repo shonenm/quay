@@ -350,26 +350,38 @@ impl App {
         self.forward_input = ForwardInput::new();
     }
 
-    pub fn set_entries(&mut self, mut entries: Vec<PortEntry>) {
-        // Apply stored SSH forwards for Docker target remote mode.
-        // SSH ControlMaster causes tunnel processes to exit, so ps aux
-        // can't detect them. Use stored mappings as fallback.
+    /// Returns the known forwards for the active connection.
+    pub fn known_forwards(&self) -> &HashMap<u16, u16> {
+        static EMPTY: std::sync::LazyLock<HashMap<u16, u16>> =
+            std::sync::LazyLock::new(HashMap::new);
+        self.ssh_forwards
+            .get(&self.active_connection)
+            .unwrap_or(&EMPTY)
+    }
+
+    /// Returns true if `ssh_forwards` was updated (caller should persist).
+    pub fn set_entries(&mut self, entries: Vec<PortEntry>) -> bool {
+        let mut forwards_changed = false;
+
         if self.docker_target.is_some() && self.remote_host.is_some() {
-            if let Some(forwards) = self.ssh_forwards.get(&self.active_connection) {
-                for entry in &mut entries {
-                    if let Some(&local_port) = forwards.get(&entry.local_port) {
-                        if !entry.is_open {
-                            entry.is_open = true;
-                        }
-                        if entry.forwarded_port.is_none() {
-                            entry.forwarded_port = Some(local_port);
-                        }
+            // Persist newly detected mappings from collect_all() (lsof+probe)
+            for entry in &entries {
+                if let Some(fwd) = entry.forwarded_port {
+                    let map = self
+                        .ssh_forwards
+                        .entry(self.active_connection)
+                        .or_default();
+                    if map.get(&entry.local_port) != Some(&fwd) {
+                        map.insert(entry.local_port, fwd);
+                        forwards_changed = true;
                     }
                 }
             }
         }
+
         self.entries = entries;
         self.apply_filter();
+        forwards_changed
     }
 
     pub fn apply_filter(&mut self) {
