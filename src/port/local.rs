@@ -54,6 +54,7 @@ fn parse_lsof_fields(output: &str, remote_mode: bool) -> Vec<PortEntry> {
                         // Remote lsof LISTEN = definitely open on the remote side
                         is_open: remote_mode,
                         is_loopback: false,
+                        forwarded_port: None,
                     });
                 }
             }

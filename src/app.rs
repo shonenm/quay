@@ -1,6 +1,7 @@
 use crate::connection::Connection;
 use crate::port::{PortEntry, PortSource};
 use crate::preset::Preset;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -260,6 +261,11 @@ pub struct App {
     pub connection_selected: usize,
     pub connection_input: ConnectionInput,
     pub connection_popup_mode: ConnectionPopupMode,
+    // Tracks SSH forwards created by quay, per connection.
+    // connection_index → (container_port → local_port).
+    // SSH ControlMaster causes tunnel processes to exit,
+    // making them invisible to ps aux-based detection.
+    pub ssh_forwards: HashMap<usize, HashMap<u16, u16>>,
 }
 
 impl App {
@@ -288,6 +294,7 @@ impl App {
             connection_selected: 0,
             connection_input: ConnectionInput::new(),
             connection_popup_mode: ConnectionPopupMode::List,
+            ssh_forwards: HashMap::new(),
         }
     }
 
@@ -343,7 +350,24 @@ impl App {
         self.forward_input = ForwardInput::new();
     }
 
-    pub fn set_entries(&mut self, entries: Vec<PortEntry>) {
+    pub fn set_entries(&mut self, mut entries: Vec<PortEntry>) {
+        // Apply stored SSH forwards for Docker target remote mode.
+        // SSH ControlMaster causes tunnel processes to exit, so ps aux
+        // can't detect them. Use stored mappings as fallback.
+        if self.docker_target.is_some() && self.remote_host.is_some() {
+            if let Some(forwards) = self.ssh_forwards.get(&self.active_connection) {
+                for entry in &mut entries {
+                    if let Some(&local_port) = forwards.get(&entry.local_port) {
+                        if !entry.is_open {
+                            entry.is_open = true;
+                        }
+                        if entry.forwarded_port.is_none() {
+                            entry.forwarded_port = Some(local_port);
+                        }
+                    }
+                }
+            }
+        }
         self.entries = entries;
         self.apply_filter();
     }
@@ -590,6 +614,7 @@ mod tests {
             ssh_host: None,
             is_open: true,
             is_loopback: false,
+            forwarded_port: None,
         };
         let input = ForwardInput::from_entry(&entry);
         assert_eq!(input.local_port, "3000");
@@ -613,6 +638,7 @@ mod tests {
             ssh_host: Some("myserver".to_string()),
             is_open: true,
             is_loopback: false,
+            forwarded_port: None,
         };
         let input = ForwardInput::from_entry(&entry);
         assert_eq!(input.local_port, "9000");
@@ -811,6 +837,7 @@ mod tests {
             ssh_host: None,
             is_open: true,
             is_loopback: false,
+            forwarded_port: None,
         };
         let input = ForwardInput::for_remote_entry(&entry, "user@server");
         assert_eq!(input.local_port, "18080");

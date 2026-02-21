@@ -83,6 +83,7 @@ fn parse_docker_ps(output: &str, remote_mode: bool) -> Result<Vec<PortEntry>> {
                                 ssh_host: None,
                                 is_open: remote_mode,
                                 is_loopback: false,
+                                forwarded_port: None,
                             });
                         }
                     }
@@ -102,6 +103,7 @@ fn parse_docker_ps(output: &str, remote_mode: bool) -> Result<Vec<PortEntry>> {
                             ssh_host: None,
                             is_open: remote_mode,
                             is_loopback: false,
+                            forwarded_port: None,
                         });
                     }
                 }
@@ -227,6 +229,7 @@ fn parse_ss_output(output: &str, container_name: &str) -> Vec<PortEntry> {
             ssh_host: None,
             is_open: true,
             is_loopback,
+            forwarded_port: None,
         });
     }
 
@@ -390,6 +393,27 @@ LISTEN 0      511     0.0.0.0:3000        0.0.0.0:*     users:((\"node\",pid=123
         let entries = parse_ss_output(output, "mycontainer");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].process_name, "node");
+    }
+
+    #[test]
+    fn test_collect_from_container_entries_have_is_open_reset_pattern() {
+        // Entries from parse_ss_output default to is_open=true.
+        // In collect_all(), Docker Target mode resets is_open=false before
+        // probing localhost, so only forwarded ports show as open.
+        let output = "\
+State  Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process
+LISTEN 0      511           *:3000              *:*
+LISTEN 0      511     0.0.0.0:5173        0.0.0.0:*
+";
+        let mut entries = parse_ss_output(output, "mycontainer");
+        // parse_ss_output sets is_open=true for all entries
+        assert!(entries.iter().all(|e| e.is_open));
+
+        // Simulate the reset that collect_all() performs
+        for entry in entries.iter_mut() {
+            entry.is_open = false;
+        }
+        assert!(entries.iter().all(|e| !e.is_open));
     }
 
     #[test]

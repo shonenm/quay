@@ -357,6 +357,7 @@ pub(crate) async fn run_tui_with_entries(
                                             ssh_host: Some(app.forward_input.ssh_host.clone()),
                                             is_open: true,
                                             is_loopback: false,
+                                            forwarded_port: None,
                                         };
                                         let mut entries = app.entries.clone();
                                         entries.push(mock_entry);
@@ -369,6 +370,18 @@ pub(crate) async fn run_tui_with_entries(
                                 } else if let Some((spec, host)) = app.forward_input.to_spec() {
                                     match port::ssh::create_forward(&spec, &host, false) {
                                         Ok(pid) => {
+                                            // Store forward mapping for Docker target mode
+                                            if app.is_docker_target() {
+                                                if let (Ok(rp), Ok(lp)) = (
+                                                    app.forward_input.remote_port.parse::<u16>(),
+                                                    app.forward_input.local_port.parse::<u16>(),
+                                                ) {
+                                                    app.ssh_forwards
+                                                        .entry(app.active_connection)
+                                                        .or_default()
+                                                        .insert(rp, lp);
+                                                }
+                                            }
                                             app.set_status(&format!(
                                                 "Forward created (PID: {pid})"
                                             ));
@@ -779,6 +792,7 @@ pub(crate) async fn run_tui_with_entries(
                                             ssh_host: Some(host.clone()),
                                             is_open: true,
                                             is_loopback: false,
+                                            forwarded_port: None,
                                         };
                                         let mut entries = app.entries.clone();
                                         entries.push(mock_entry);
@@ -790,6 +804,11 @@ pub(crate) async fn run_tui_with_entries(
                                     } else {
                                         match port::ssh::create_forward(&spec, &host, false) {
                                             Ok(pid) => {
+                                                // Store forward mapping for Docker target mode
+                                                app.ssh_forwards
+                                                    .entry(app.active_connection)
+                                                    .or_default()
+                                                    .insert(port, port);
                                                 app.set_status(&format!(
                                                     "Forward :{port} -> {host}:{port} (PID: {pid})"
                                                 ));

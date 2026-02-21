@@ -166,15 +166,31 @@ fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
         .filtered_entries
         .iter()
         .map(|entry| {
-            let (indicator, color) = if entry.is_open {
+            let (indicator, color) = if app.docker_target.is_some() {
+                // Docker Target: all ports are listening (from ss -tln)
+                // Color indicates localhost accessibility
+                if entry.is_open {
+                    ("●", Color::Green)
+                } else {
+                    ("●", Color::Yellow)
+                }
+            } else if entry.is_open {
                 ("●", Color::Green)
             } else {
                 ("○", Color::DarkGray)
             };
-            let local_cell = Line::from(vec![
-                Span::styled(indicator, Style::default().fg(color)),
-                Span::raw(format!(" :{}", entry.local_port)),
-            ]);
+            let local_cell = if let Some(fwd) = entry.forwarded_port {
+                Line::from(vec![
+                    Span::styled(indicator, Style::default().fg(color)),
+                    Span::raw(format!(" :{}", entry.local_port)),
+                    Span::styled(format!("→:{fwd}"), Style::default().fg(Color::Cyan)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(indicator, Style::default().fg(color)),
+                    Span::raw(format!(" :{}", entry.local_port)),
+                ])
+            };
             Row::new(vec![
                 Cell::from(entry.source.to_string()),
                 Cell::from(local_cell),
@@ -192,7 +208,7 @@ fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
         rows,
         [
             Constraint::Length(8),
-            Constraint::Length(10),
+            Constraint::Length(16),
             Constraint::Length(20),
             Constraint::Min(20),
         ],
@@ -269,13 +285,24 @@ fn draw_details_popup(frame: &mut Frame, app: &App) {
         return;
     };
 
-    let (open_text, open_color) = if entry.is_open {
+    let is_docker_target = app.docker_target.is_some();
+
+    let (open_text, open_color) = if is_docker_target {
+        // Docker Target: all entries are listening (from ss -tln)
+        ("Yes", Color::Green)
+    } else if entry.is_open {
         ("Yes", Color::Green)
     } else {
         ("No", Color::DarkGray)
     };
 
-    let lines = vec![
+    let (accessible_text, accessible_color) = if entry.is_open {
+        ("Yes", Color::Green)
+    } else {
+        ("No", Color::Yellow)
+    };
+
+    let mut lines = vec![
         Line::from(vec![
             Span::styled("Type: ", Style::default().fg(Color::Yellow)),
             Span::raw(entry.source.to_string()),
@@ -288,6 +315,20 @@ fn draw_details_popup(frame: &mut Frame, app: &App) {
             Span::styled("Open: ", Style::default().fg(Color::Yellow)),
             Span::styled(open_text, Style::default().fg(open_color)),
         ]),
+    ];
+    if is_docker_target {
+        lines.push(Line::from(vec![
+            Span::styled("Accessible: ", Style::default().fg(Color::Yellow)),
+            Span::styled(accessible_text, Style::default().fg(accessible_color)),
+        ]));
+        if let Some(fwd) = entry.forwarded_port {
+            lines.push(Line::from(vec![
+                Span::styled("Forwarded: ", Style::default().fg(Color::Yellow)),
+                Span::styled(format!("→ :{fwd}"), Style::default().fg(Color::Cyan)),
+            ]));
+        }
+    }
+    lines.extend([
         Line::from(vec![
             Span::styled("Remote: ", Style::default().fg(Color::Yellow)),
             Span::raw(entry.remote_display()),
@@ -305,7 +346,7 @@ fn draw_details_popup(frame: &mut Frame, app: &App) {
             Span::styled("[Esc] ", Style::default().fg(Color::DarkGray)),
             Span::raw("Close"),
         ]),
-    ];
+    ]);
 
     let paragraph = Paragraph::new(lines).block(
         Block::default()

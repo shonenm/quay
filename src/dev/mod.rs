@@ -220,6 +220,7 @@ async fn run_scenario(name: Option<String>, list: bool) -> Result<()> {
             ssh_host: None,
             is_open: e.should_listen,
             is_loopback: false,
+            forwarded_port: None,
         })
         .collect();
     entries.sort_by_key(|e| (!e.is_open, e.local_port));

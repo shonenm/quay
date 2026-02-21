@@ -17,6 +17,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             ssh_host: None,
             is_open: true,
             is_loopback: false,
+            forwarded_port: None,
         },
         PortEntry {
             source: PortSource::Local,
@@ -30,6 +31,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             ssh_host: None,
             is_open: true,
             is_loopback: false,
+            forwarded_port: None,
         },
         PortEntry {
             source: PortSource::Local,
@@ -43,6 +45,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             ssh_host: None,
             is_open: false,
             is_loopback: false,
+            forwarded_port: None,
         },
         // Duplicate LOCAL entries that overlap with SSH/Docker
         // (simulates lsof detecting the ssh/docker-proxy LISTEN socket)
@@ -58,6 +61,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             ssh_host: None,
             is_open: true,
             is_loopback: false,
+            forwarded_port: None,
         },
         PortEntry {
             source: PortSource::Local,
@@ -71,6 +75,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             ssh_host: None,
             is_open: true,
             is_loopback: false,
+            forwarded_port: None,
         },
         // SSH x 2
         PortEntry {
@@ -85,6 +90,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             ssh_host: Some("bastion.example.com".to_string()),
             is_open: true,
             is_loopback: false,
+            forwarded_port: None,
         },
         PortEntry {
             source: PortSource::Ssh,
@@ -98,6 +104,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             ssh_host: Some("gateway.internal".to_string()),
             is_open: false,
             is_loopback: false,
+            forwarded_port: None,
         },
         // Docker x 3
         PortEntry {
@@ -112,6 +119,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             ssh_host: None,
             is_open: true,
             is_loopback: false,
+            forwarded_port: None,
         },
         PortEntry {
             source: PortSource::Docker,
@@ -125,6 +133,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             ssh_host: None,
             is_open: true,
             is_loopback: false,
+            forwarded_port: None,
         },
         PortEntry {
             source: PortSource::Docker,
@@ -138,6 +147,7 @@ pub fn generate_mock_entries() -> Vec<PortEntry> {
             ssh_host: None,
             is_open: false,
             is_loopback: false,
+            forwarded_port: None,
         },
     ];
 

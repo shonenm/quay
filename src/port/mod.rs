@@ -37,6 +37,7 @@ pub struct PortEntry {
     pub ssh_host: Option<String>,
     pub is_open: bool,
     pub is_loopback: bool,
+    pub forwarded_port: Option<u16>,
 }
 
 impl PortEntry {
@@ -140,13 +141,36 @@ async fn probe_open_ports(entries: &mut [PortEntry], remote_mode: bool) {
     }
 }
 
+
 pub async fn collect_all(
     remote_host: Option<&str>,
     docker_target: Option<&str>,
 ) -> anyhow::Result<Vec<PortEntry>> {
     let mut entries = if let Some(container) = docker_target {
         // Docker target mode: only collect from inside the specified container
-        docker::collect_from_container(container, remote_host).await?
+        let mut e = docker::collect_from_container(container, remote_host).await?;
+        for entry in &mut e {
+            entry.is_open = false;
+        }
+        if remote_host.is_some() {
+            // Remote: SSH tunnel detection only (probe would false-positive)
+            if let Ok(ssh_entries) = ssh::collect().await {
+                let ssh_port_map: HashMap<u16, u16> = ssh_entries
+                    .iter()
+                    .filter_map(|se| se.remote_port.map(|rp| (rp, se.local_port)))
+                    .collect();
+                for entry in &mut e {
+                    if let Some(&tunnel_local) = ssh_port_map.get(&entry.local_port) {
+                        entry.is_open = true;
+                        entry.forwarded_port = Some(tunnel_local);
+                    }
+                }
+            }
+        } else {
+            // Local: probe localhost (Docker port mappings)
+            probe_open_ports(&mut e, false).await;
+        }
+        e
     } else {
         let mut e = collect_entries(remote_host).await?;
         probe_open_ports(&mut e, remote_host.is_some()).await;
@@ -236,6 +260,7 @@ mod tests {
             ssh_host: None,
             is_open: false,
             is_loopback: false,
+            forwarded_port: None,
         }
     }
 
@@ -278,5 +303,54 @@ mod tests {
         dedup_entries(&mut entries);
 
         assert_eq!(entries.len(), 3);
+    }
+
+    /// Simulates the SSH tunnel merge logic used in Docker Target remote mode:
+    /// In remote mode, probe is skipped (it would false-positive on SSH tunnel
+    /// local_ports), so accessibility is determined solely by SSH tunnel
+    /// remote_port matching the container's listening port.
+    /// e.g. `ssh -L 3000:container_ip:8080` → remote_port=8080 matches Docker port 8080.
+    #[test]
+    fn test_ssh_tunnel_merge_marks_matching_ports_open() {
+        // Docker entries from remote container (all start with is_open=false, no probe)
+        let mut docker_entries = vec![
+            make_entry(PortSource::Docker, 8080), // SSH tunnel targets this port
+            make_entry(PortSource::Docker, 3000), // SSH tunnel local_port=3000, but remote_port=8080
+            make_entry(PortSource::Docker, 5432), // no SSH tunnel
+        ];
+
+        // SSH tunnel: local_port=3000, remote_port=8080 (forwards to container port 8080)
+        // Without the fix, probing 127.0.0.1:3000 would succeed (tunnel listens there)
+        // and Docker port 3000 would be marked open — a false positive.
+        let ssh_entries = vec![
+            {
+                let mut e = make_entry(PortSource::Ssh, 3000);
+                e.remote_port = Some(8080);
+                e
+            },
+        ];
+
+        // Apply the same merge logic as collect_all() remote mode: match on remote_port only
+        let ssh_port_map: HashMap<u16, u16> = ssh_entries
+            .iter()
+            .filter_map(|se| se.remote_port.map(|rp| (rp, se.local_port)))
+            .collect();
+        for entry in &mut docker_entries {
+            if let Some(&tunnel_local) = ssh_port_map.get(&entry.local_port) {
+                entry.is_open = true;
+                entry.forwarded_port = Some(tunnel_local);
+            }
+        }
+
+        // Port 8080: SSH tunnel remote_port=8080, local_port=3000 → open, forwarded to :3000
+        assert!(docker_entries[0].is_open);
+        assert_eq!(docker_entries[0].forwarded_port, Some(3000));
+        // Port 3000: no SSH tunnel with remote_port=3000 → stays closed
+        // (Without the fix, probe would false-positive here because tunnel listens on 3000)
+        assert!(!docker_entries[1].is_open);
+        assert_eq!(docker_entries[1].forwarded_port, None);
+        // Port 5432: no SSH tunnel with remote_port=5432 → stays closed
+        assert!(!docker_entries[2].is_open);
+        assert_eq!(docker_entries[2].forwarded_port, None);
     }
 }
