@@ -60,6 +60,58 @@ async fn resolve_container_ip(app: &mut App) {
     }
 }
 
+#[allow(clippy::unused_async)]
+async fn restore_forwards(app: &mut App) {
+    let Some(host) = app.remote_host.clone() else { return };
+    let Some(forwards) = app.ssh_forwards.get(&app.active_connection).cloned() else { return };
+    if forwards.is_empty() { return; }
+
+    let remote_target = if app.is_docker_target() {
+        match app.container_ip.as_deref() {
+            Some(ip) => ip.to_string(),
+            None => return,
+        }
+    } else {
+        "localhost".to_string()
+    };
+
+    let mut restored = 0u32;
+    let mut failed = 0u32;
+
+    for (&container_port, &local_port) in &forwards {
+        if forward::is_port_listening(local_port) {
+            continue;
+        }
+        let spec = format!("{local_port}:{remote_target}:{container_port}");
+        match port::ssh::create_forward(&spec, &host, false) {
+            Ok(_) => restored += 1,
+            Err(_) => failed += 1,
+        }
+    }
+
+    if restored > 0 && failed > 0 {
+        app.set_status(&format!("Restored {restored} forward(s), {failed} failed"));
+    } else if restored > 0 {
+        app.set_status(&format!("Restored {restored} forward(s)"));
+    }
+}
+
+async fn activate_connection(app: &mut App, mock_mode: bool) {
+    app.apply_connection();
+    resolve_container_ip(app).await;
+    if mock_mode {
+        app.entries.clear();
+        app.apply_filter();
+    } else {
+        restore_forwards(app).await;
+        refresh_and_save(app).await;
+    }
+    let name = app.active_connection()
+        .map_or("Unknown", |c| c.name.as_str()).to_string();
+    app.selected = 0;
+    app.set_status(&format!("Switched to: {name}"));
+}
+
 async fn handle_submit_forward(app: &mut App, mock_mode: bool) {
     if mock_mode {
         if app.forward_input.to_spec().is_some() {
@@ -91,7 +143,7 @@ async fn handle_submit_forward(app: &mut App, mock_mode: bool) {
         let already_listening = local_port.is_some_and(forward::is_port_listening);
 
         if already_listening {
-            if app.is_docker_target() {
+            if app.is_remote() {
                 if let (Ok(rp), Ok(lp)) = (
                     app.forward_input.remote_port.parse::<u16>(),
                     app.forward_input.local_port.parse::<u16>(),
@@ -108,7 +160,7 @@ async fn handle_submit_forward(app: &mut App, mock_mode: bool) {
         } else {
             match port::ssh::create_forward(&spec, &host, false) {
                 Ok(pid) => {
-                    if app.is_docker_target() {
+                    if app.is_remote() {
                         if let (Ok(rp), Ok(lp)) = (
                             app.forward_input.remote_port.parse::<u16>(),
                             app.forward_input.local_port.parse::<u16>(),
@@ -170,6 +222,10 @@ async fn handle_kill_action(app: &mut App, mock_mode: bool) {
                 };
                 match result {
                     Ok(status) if status.success() => {
+                        if let Some(map) = app.ssh_forwards.get_mut(&app.active_connection) {
+                            map.retain(|_, &mut lp| lp != port);
+                            save_forwards(app);
+                        }
                         app.set_status(&format!("Killed PID {pid} in container"));
                         refresh_and_save(app).await;
                     }
@@ -194,6 +250,12 @@ async fn handle_kill_action(app: &mut App, mock_mode: bool) {
         };
         match port::kill_by_port(port, kill_host).await {
             Ok(()) => {
+                if is_ssh {
+                    if let Some(map) = app.ssh_forwards.get_mut(&app.active_connection) {
+                        map.retain(|_, &mut lp| lp != port);
+                        save_forwards(app);
+                    }
+                }
                 app.set_status(&format!("Killed process on port {port}"));
                 refresh_and_save(app).await;
             }
@@ -288,20 +350,7 @@ async fn handle_connection_switch(app: &mut App, direction: i32, mock_mode: bool
     } else {
         app.prev_connection();
     }
-    app.apply_connection();
-    resolve_container_ip(app).await;
-    if mock_mode {
-        app.entries.clear();
-        app.apply_filter();
-    } else {
-        refresh_and_save(app).await;
-    }
-    let name = app
-        .active_connection()
-        .map_or("Unknown", |c| c.name.as_str())
-        .to_string();
-    app.selected = 0;
-    app.set_status(&format!("Switched to: {name}"));
+    activate_connection(app, mock_mode).await;
 }
 
 #[derive(Parser)]
@@ -599,6 +648,8 @@ pub(crate) async fn run_tui_with_entries(
         app.set_status("[mock] Loaded mock data");
     } else {
         refresh_and_save(&mut app).await;
+        restore_forwards(&mut app).await;
+        refresh_and_save(&mut app).await;
     }
 
     // Event handler
@@ -710,20 +761,7 @@ pub(crate) async fn run_tui_with_entries(
                             Action::Down => app.connection_next(),
                             Action::ActivateConnection => {
                                 app.active_connection = app.connection_selected;
-                                app.apply_connection();
-                                resolve_container_ip(&mut app).await;
-                                if mock_mode {
-                                    app.entries.clear();
-                                    app.apply_filter();
-                                } else {
-                                    refresh_and_save(&mut app).await;
-                                }
-                                let name = app
-                                    .active_connection()
-                                    .map_or("Unknown", |c| c.name.as_str())
-                                    .to_string();
-                                app.selected = 0;
-                                app.set_status(&format!("Switched to: {name}"));
+                                activate_connection(&mut app, mock_mode).await;
                                 app.popup = Popup::None;
                             }
                             Action::AddConnection => {
