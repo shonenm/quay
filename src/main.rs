@@ -12,15 +12,16 @@ use anyhow::Result;
 use app::{App, ConnectionPopupMode, Filter, ForwardInput, InputMode, Popup};
 use clap::{Parser, Subcommand};
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use event::{
-    Action, AppEvent, EventHandler, handle_connection_input_key, handle_connection_key,
+    Action, AppEvent, handle_connection_input_key, handle_connection_key,
     handle_forward_key, handle_key, handle_mouse, handle_popup_key, handle_preset_key,
     handle_search_key,
 };
+use futures::StreamExt;
 use port::PortEntry;
 use ratatui::prelude::*;
 use std::collections::HashMap;
@@ -96,23 +97,208 @@ async fn restore_forwards(app: &mut App) {
     }
 }
 
-async fn activate_connection(app: &mut App, mock_mode: bool) {
+fn activate_connection_ui(app: &mut App) {
     app.apply_connection();
-    resolve_container_ip(app).await;
-    if mock_mode {
-        app.entries.clear();
-        app.apply_filter();
-    } else {
-        restore_forwards(app).await;
-        refresh_and_save(app).await;
-    }
+    app.entries.clear();
+    app.apply_filter();
+    app.selected = 0;
     let name = app.active_connection()
         .map_or("Unknown", |c| c.name.as_str()).to_string();
-    app.selected = 0;
     app.set_status(&format!("Switched to: {name}"));
 }
 
-async fn handle_submit_forward(app: &mut App, mock_mode: bool) {
+struct ActivationInput {
+    remote_host: Option<String>,
+    docker_target: Option<String>,
+    is_docker_target: bool,
+    ssh_forwards_for_conn: Option<HashMap<u16, u16>>,
+    known_forwards: HashMap<u16, u16>,
+    active_connection: usize,
+}
+
+struct ActivationResult {
+    active_connection: usize,
+    container_ip: Option<String>,
+    restore_status: Option<String>,
+    entries: anyhow::Result<Vec<PortEntry>>,
+}
+
+struct RefreshResult {
+    active_connection: usize,
+    entries: anyhow::Result<Vec<PortEntry>>,
+}
+
+fn extract_activation_input(app: &App) -> ActivationInput {
+    ActivationInput {
+        remote_host: app.remote_host.clone(),
+        docker_target: app.docker_target.clone(),
+        is_docker_target: app.is_docker_target(),
+        ssh_forwards_for_conn: app.ssh_forwards.get(&app.active_connection).cloned(),
+        known_forwards: app.known_forwards().clone(),
+        active_connection: app.active_connection,
+    }
+}
+
+fn restore_forwards_standalone(
+    host: &str,
+    forwards: &HashMap<u16, u16>,
+    is_docker_target: bool,
+    container_ip: Option<&str>,
+) -> Option<String> {
+    if forwards.is_empty() {
+        return None;
+    }
+
+    let remote_target = if is_docker_target {
+        match container_ip {
+            Some(ip) => ip.to_string(),
+            None => return None,
+        }
+    } else {
+        "localhost".to_string()
+    };
+
+    let mut restored = 0u32;
+    let mut failed = 0u32;
+
+    for (&container_port, &local_port) in forwards {
+        if forward::is_port_listening(local_port) {
+            continue;
+        }
+        let spec = format!("{local_port}:{remote_target}:{container_port}");
+        match port::ssh::create_forward(&spec, host, false) {
+            Ok(_) => restored += 1,
+            Err(_) => failed += 1,
+        }
+    }
+
+    if restored > 0 && failed > 0 {
+        Some(format!("Restored {restored} forward(s), {failed} failed"))
+    } else if restored > 0 {
+        Some(format!("Restored {restored} forward(s)"))
+    } else {
+        None
+    }
+}
+
+async fn run_activation(input: ActivationInput) -> ActivationResult {
+    // 1. Resolve container IP
+    let container_ip = if let Some(ref target) = input.docker_target {
+        port::docker::get_container_ip(target, input.remote_host.as_deref())
+            .await
+            .ok()
+    } else {
+        None
+    };
+
+    // 2. Restore forwards (sync, fast)
+    let restore_status = if let (Some(ref host), Some(ref forwards)) =
+        (&input.remote_host, &input.ssh_forwards_for_conn)
+    {
+        restore_forwards_standalone(host, forwards, input.is_docker_target, container_ip.as_deref())
+    } else {
+        None
+    };
+
+    // 3. Collect all ports (heavy I/O)
+    let entries = port::collect_all(
+        input.remote_host.as_deref(),
+        input.docker_target.as_deref(),
+        &input.known_forwards,
+    )
+    .await;
+
+    ActivationResult {
+        active_connection: input.active_connection,
+        container_ip,
+        restore_status,
+        entries,
+    }
+}
+
+fn apply_activation_result(app: &mut App, result: ActivationResult) {
+    if app.active_connection != result.active_connection {
+        return; // stale result, discard
+    }
+    app.container_ip = result.container_ip.or(app.container_ip.take());
+    if let Some(status) = result.restore_status {
+        app.set_status(&status);
+    }
+    match result.entries {
+        Ok(entries) => {
+            if app.set_entries(entries) {
+                save_forwards(app);
+            }
+        }
+        Err(e) => app.set_status(&format!("Refresh failed: {e}")),
+    }
+}
+
+fn apply_refresh_result(app: &mut App, result: RefreshResult) {
+    if app.active_connection != result.active_connection {
+        return;
+    }
+    match result.entries {
+        Ok(entries) => {
+            if app.set_entries(entries) {
+                save_forwards(app);
+            }
+        }
+        Err(e) => app.set_status(&format!("Refresh failed: {e}")),
+    }
+}
+
+fn spawn_activation(
+    app: &App,
+    handle: &mut Option<tokio::task::JoinHandle<()>>,
+    refresh_handle: &mut Option<tokio::task::JoinHandle<()>>,
+    tx: &tokio::sync::mpsc::Sender<ActivationResult>,
+) {
+    if let Some(h) = handle.take() {
+        h.abort();
+    }
+    if let Some(h) = refresh_handle.take() {
+        h.abort();
+    }
+    let input = extract_activation_input(app);
+    let tx = tx.clone();
+    *handle = Some(tokio::spawn(async move {
+        let result = run_activation(input).await;
+        let _ = tx.send(result).await;
+    }));
+}
+
+fn spawn_refresh(
+    app: &App,
+    refresh_handle: &mut Option<tokio::task::JoinHandle<()>>,
+    activation_handle: Option<&tokio::task::JoinHandle<()>>,
+    tx: &tokio::sync::mpsc::Sender<RefreshResult>,
+) {
+    // activation 実行中なら refresh は不要 (activation が collect_all を含む)
+    if activation_handle.is_some_and(|h| !h.is_finished()) {
+        return;
+    }
+    if let Some(h) = refresh_handle.take() {
+        h.abort();
+    }
+    let remote_host = app.remote_host.clone();
+    let docker_target = app.docker_target.clone();
+    let known_forwards = app.known_forwards().clone();
+    let active_connection = app.active_connection;
+    let tx = tx.clone();
+    *refresh_handle = Some(tokio::spawn(async move {
+        let entries = port::collect_all(
+            remote_host.as_deref(),
+            docker_target.as_deref(),
+            &known_forwards,
+        )
+        .await;
+        let _ = tx.send(RefreshResult { active_connection, entries }).await;
+    }));
+}
+
+fn handle_submit_forward(app: &mut App, mock_mode: bool) -> bool {
+    let mut needs_refresh = false;
     if mock_mode {
         if app.forward_input.to_spec().is_some() {
             let local_port: u16 = app.forward_input.local_port.parse().unwrap_or(0);
@@ -156,7 +342,7 @@ async fn handle_submit_forward(app: &mut App, mock_mode: bool) {
                 }
             }
             app.set_status("Forward already active, registered mapping");
-            refresh_and_save(app).await;
+            needs_refresh = true;
         } else {
             match port::ssh::create_forward(&spec, &host, false) {
                 Ok(pid) => {
@@ -173,7 +359,7 @@ async fn handle_submit_forward(app: &mut App, mock_mode: bool) {
                         }
                     }
                     app.set_status(&format!("Forward created (PID: {pid})"));
-                    refresh_and_save(app).await;
+                    needs_refresh = true;
                 }
                 Err(e) => {
                     app.set_status(&format!("Forward failed: {e}"));
@@ -185,9 +371,14 @@ async fn handle_submit_forward(app: &mut App, mock_mode: bool) {
     }
     app.popup = Popup::None;
     app.reset_forward_input();
+    needs_refresh
 }
 
-async fn handle_kill_action(app: &mut App, mock_mode: bool) {
+fn handle_kill_action(
+    app: &mut App,
+    mock_mode: bool,
+    tx: &tokio::sync::mpsc::Sender<RefreshResult>,
+) {
     let Some(entry) = app.selected_entry() else {
         return;
     };
@@ -204,71 +395,84 @@ async fn handle_kill_action(app: &mut App, mock_mode: bool) {
             .collect();
         app.set_entries(entries);
         app.set_status(&format!("[mock] Removed port {port}"));
-    } else if app.is_docker_target() {
-        if let Some(pid) = pid {
-            if let Some(ref target) = app.docker_target {
-                let pid_str = pid.to_string();
-                let result = match app.remote_host.as_deref() {
-                    Some(host) => port::ssh_cmd_tokio(
-                        host,
-                        &["docker", "exec", target, "kill", &pid_str],
-                    )
-                    .status()
-                    .await,
-                    None => tokio::process::Command::new("docker")
-                        .args(["exec", target, "kill", &pid_str])
-                        .status()
-                        .await,
-                };
-                match result {
-                    Ok(status) if status.success() => {
-                        if let Some(map) = app.ssh_forwards.get_mut(&app.active_connection) {
-                            map.retain(|_, &mut lp| lp != port);
-                            save_forwards(app);
-                        }
-                        app.set_status(&format!("Killed PID {pid} in container"));
-                        refresh_and_save(app).await;
-                    }
-                    Ok(_) => {
-                        app.set_status(&format!("Kill failed for PID {pid} in container"));
-                    }
-                    Err(e) => {
-                        app.set_status(&format!("Kill failed: {e}"));
-                    }
-                }
-            }
-        } else {
-            app.set_status(
-                "No PID available for this port (container ss doesn't report PIDs)",
-            );
+        return;
+    }
+
+    // Pre-remove from ssh_forwards (if kill fails, the forward is already broken)
+    if is_ssh {
+        if let Some(map) = app.ssh_forwards.get_mut(&app.active_connection) {
+            map.retain(|_, &mut lp| lp != port);
+            save_forwards(app);
         }
-    } else {
-        let kill_host = if is_ssh {
-            None
-        } else {
-            app.remote_host.as_deref()
-        };
-        match port::kill_by_port(port, kill_host).await {
-            Ok(()) => {
-                if is_ssh {
-                    if let Some(map) = app.ssh_forwards.get_mut(&app.active_connection) {
-                        map.retain(|_, &mut lp| lp != port);
-                        save_forwards(app);
-                    }
-                }
-                app.set_status(&format!("Killed process on port {port}"));
-                refresh_and_save(app).await;
-            }
-            Err(e) => {
-                app.set_status(&format!("Kill failed: {e}"));
-            }
+    } else if app.is_docker_target() {
+        if let Some(map) = app.ssh_forwards.get_mut(&app.active_connection) {
+            map.retain(|_, &mut lp| lp != port);
+            save_forwards(app);
         }
     }
+
+    let is_docker = app.is_docker_target();
+    let remote_host = app.remote_host.clone();
+    let docker_target = app.docker_target.clone();
+    let known_forwards = app.known_forwards().clone();
+    let active_connection = app.active_connection;
+    let tx = tx.clone();
+
+    app.set_status(&format!("Killing port {port}..."));
+
+    tokio::spawn(async move {
+        let killed = if is_docker {
+            if let Some(pid) = pid {
+                if let Some(ref target) = docker_target {
+                    let pid_str = pid.to_string();
+                    let result = match remote_host.as_deref() {
+                        Some(host) => port::ssh_cmd_tokio(
+                            host,
+                            &["docker", "exec", target, "kill", &pid_str],
+                        )
+                        .status()
+                        .await,
+                        None => tokio::process::Command::new("docker")
+                            .args(["exec", target, "kill", &pid_str])
+                            .status()
+                            .await,
+                    };
+                    matches!(result, Ok(status) if status.success())
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            let kill_host = if is_ssh {
+                None
+            } else {
+                remote_host.as_deref()
+            };
+            port::kill_by_port(port, kill_host).await.is_ok()
+        };
+
+        if killed {
+            let entries = port::collect_all(
+                remote_host.as_deref(),
+                docker_target.as_deref(),
+                &known_forwards,
+            )
+            .await;
+            let _ = tx
+                .send(RefreshResult {
+                    active_connection,
+                    entries,
+                })
+                .await;
+        }
+    });
 }
 
-async fn handle_quick_forward(app: &mut App, mock_mode: bool) {
+fn handle_quick_forward(app: &mut App, mock_mode: bool) -> bool {
     let Some(entry) = app.selected_entry() else {
-        return;
+        return false;
     };
     let port = entry.local_port;
 
@@ -278,7 +482,7 @@ async fn handle_quick_forward(app: &mut App, mock_mode: bool) {
         } else {
             app.set_status("Quick Forward requires --remote mode");
         }
-        return;
+        return false;
     };
 
     let forward_target = if app.is_docker_target() {
@@ -286,7 +490,7 @@ async fn handle_quick_forward(app: &mut App, mock_mode: bool) {
             ip.to_string()
         } else {
             app.set_status("Container IP not available");
-            return;
+            return false;
         }
     } else {
         "localhost".to_string()
@@ -313,6 +517,7 @@ async fn handle_quick_forward(app: &mut App, mock_mode: bool) {
         entries.sort_by_key(|e| (!e.is_open, e.local_port));
         app.set_entries(entries);
         app.set_status(&format!("[mock] Forward :{port} -> {host}:{port}"));
+        false
     } else if forward::is_port_listening(port) {
         app.ssh_forwards
             .entry(app.active_connection)
@@ -320,7 +525,7 @@ async fn handle_quick_forward(app: &mut App, mock_mode: bool) {
             .insert(port, port);
         save_forwards(app);
         app.set_status("Forward already active, registered mapping");
-        refresh_and_save(app).await;
+        true
     } else {
         match port::ssh::create_forward(&spec, &host, false) {
             Ok(pid) => {
@@ -332,25 +537,27 @@ async fn handle_quick_forward(app: &mut App, mock_mode: bool) {
                 app.set_status(&format!(
                     "Forward :{port} -> {host}:{port} (PID: {pid})"
                 ));
-                refresh_and_save(app).await;
+                true
             }
             Err(e) => {
                 app.set_status(&format!("Forward failed: {e}"));
+                false
             }
         }
     }
 }
 
-async fn handle_connection_switch(app: &mut App, direction: i32, mock_mode: bool) {
+fn handle_connection_switch(app: &mut App, direction: i32, mock_mode: bool) -> bool {
     if !app.has_multiple_connections() {
-        return;
+        return false;
     }
     if direction > 0 {
         app.next_connection();
     } else {
         app.prev_connection();
     }
-    activate_connection(app, mock_mode).await;
+    activate_connection_ui(app);
+    !mock_mode
 }
 
 #[derive(Parser)]
@@ -647,19 +854,47 @@ pub(crate) async fn run_tui_with_entries(
         app.set_entries(entries);
         app.set_status("[mock] Loaded mock data");
     } else {
-        refresh_and_save(&mut app).await;
         restore_forwards(&mut app).await;
         refresh_and_save(&mut app).await;
     }
 
-    // Event handler
-    let event_handler = EventHandler::new(Duration::from_millis(250));
-
     // Main loop
+    let (activation_tx, mut activation_rx) = tokio::sync::mpsc::channel::<ActivationResult>(1);
+    let mut activation_handle: Option<tokio::task::JoinHandle<()>> = None;
+    let (refresh_tx, mut refresh_rx) = tokio::sync::mpsc::channel::<RefreshResult>(1);
+    let mut refresh_handle: Option<tokio::task::JoinHandle<()>> = None;
+    let mut reader = EventStream::new();
+    let mut tick_interval = tokio::time::interval(Duration::from_millis(250));
+    tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
         terminal.draw(|f| ui::draw(f, &app))?;
 
-        match event_handler.next()? {
+        let event = tokio::select! {
+            event = reader.next() => match event {
+                Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
+                    AppEvent::Key(key)
+                }
+                Some(Ok(Event::Mouse(mouse))) => AppEvent::Mouse(mouse),
+                Some(Ok(_) | Err(_)) => continue,
+                None => break,
+            },
+            result = activation_rx.recv() => {
+                if let Some(result) = result {
+                    apply_activation_result(&mut app, result);
+                }
+                continue;
+            },
+            result = refresh_rx.recv() => {
+                if let Some(result) = result {
+                    apply_refresh_result(&mut app, result);
+                }
+                continue;
+            },
+            _ = tick_interval.tick() => AppEvent::Tick,
+        };
+
+        match event {
             AppEvent::Key(key) => {
                 // Handle Forward popup specially (needs input handling)
                 if app.popup == Popup::Forward {
@@ -674,7 +909,10 @@ pub(crate) async fn run_tui_with_entries(
                                 app.reset_forward_input();
                             }
                             Action::SubmitForward => {
-                                handle_submit_forward(&mut app, mock_mode).await;
+                                let needs_refresh = handle_submit_forward(&mut app, mock_mode);
+                                if needs_refresh {
+                                    spawn_refresh(&app, &mut refresh_handle, activation_handle.as_ref(), &refresh_tx);
+                                }
                             }
                             _ => {}
                         }
@@ -705,7 +943,7 @@ pub(crate) async fn run_tui_with_entries(
                                             app.set_status(&format!(
                                                 "Forward created (PID: {pid})"
                                             ));
-                                            refresh_and_save(&mut app).await;
+                                            spawn_refresh(&app, &mut refresh_handle, activation_handle.as_ref(), &refresh_tx);
                                         }
                                         Err(e) => {
                                             app.set_status(&format!("Forward failed: {e}"));
@@ -761,7 +999,10 @@ pub(crate) async fn run_tui_with_entries(
                             Action::Down => app.connection_next(),
                             Action::ActivateConnection => {
                                 app.active_connection = app.connection_selected;
-                                activate_connection(&mut app, mock_mode).await;
+                                activate_connection_ui(&mut app);
+                                if !mock_mode {
+                                    spawn_activation(&app, &mut activation_handle, &mut refresh_handle, &activation_tx);
+                                }
                                 app.popup = Popup::None;
                             }
                             Action::AddConnection => {
@@ -850,8 +1091,8 @@ pub(crate) async fn run_tui_with_entries(
                         Action::FilterDocker => app.set_filter(Filter::Docker),
                         Action::Refresh => {
                             if !mock_mode {
-                                refresh_and_save(&mut app).await;
-                                app.set_status("Refreshed");
+                                spawn_refresh(&app, &mut refresh_handle, activation_handle.as_ref(), &refresh_tx);
+                                app.set_status("Refreshing...");
                             }
                         }
                         Action::ToggleAutoRefresh => {
@@ -865,7 +1106,7 @@ pub(crate) async fn run_tui_with_entries(
                             }
                         }
                         Action::Kill => {
-                            handle_kill_action(&mut app, mock_mode).await;
+                            handle_kill_action(&mut app, mock_mode, &refresh_tx);
                         }
                         Action::Select => {
                             app.popup = Popup::Details;
@@ -901,13 +1142,20 @@ pub(crate) async fn run_tui_with_entries(
                             app.popup = Popup::None;
                         }
                         Action::QuickForward => {
-                            handle_quick_forward(&mut app, mock_mode).await;
+                            let needs_refresh = handle_quick_forward(&mut app, mock_mode);
+                            if needs_refresh {
+                                spawn_refresh(&app, &mut refresh_handle, activation_handle.as_ref(), &refresh_tx);
+                            }
                         }
                         Action::PrevConnection => {
-                            handle_connection_switch(&mut app, -1, mock_mode).await;
+                            if handle_connection_switch(&mut app, -1, mock_mode) {
+                                spawn_activation(&app, &mut activation_handle, &mut refresh_handle, &activation_tx);
+                            }
                         }
                         Action::NextConnection => {
-                            handle_connection_switch(&mut app, 1, mock_mode).await;
+                            if handle_connection_switch(&mut app, 1, mock_mode) {
+                                spawn_activation(&app, &mut activation_handle, &mut refresh_handle, &activation_tx);
+                            }
                         }
                         Action::ShowConnections => {
                             app.connection_selected = app.active_connection;
@@ -952,7 +1200,7 @@ pub(crate) async fn run_tui_with_entries(
             AppEvent::Tick => {
                 app.tick();
                 if !mock_mode && app.should_refresh() {
-                    refresh_and_save(&mut app).await;
+                    spawn_refresh(&app, &mut refresh_handle, activation_handle.as_ref(), &refresh_tx);
                 }
             }
         }

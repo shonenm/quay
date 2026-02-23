@@ -1,36 +1,10 @@
 use crate::app::{ConnectionInput, ForwardField, ForwardInput};
-use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
-};
-use std::time::Duration;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 
 pub enum AppEvent {
     Key(KeyEvent),
     Mouse(MouseEvent),
     Tick,
-}
-
-pub struct EventHandler {
-    tick_rate: Duration,
-}
-
-impl EventHandler {
-    pub fn new(tick_rate: Duration) -> Self {
-        Self { tick_rate }
-    }
-
-    pub fn next(&self) -> anyhow::Result<AppEvent> {
-        if event::poll(self.tick_rate)? {
-            match event::read()? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    return Ok(AppEvent::Key(key));
-                }
-                Event::Mouse(mouse) => return Ok(AppEvent::Mouse(mouse)),
-                _ => {}
-            }
-        }
-        Ok(AppEvent::Tick)
-    }
 }
 
 pub fn handle_key(key: KeyEvent) -> Option<Action> {
