@@ -127,7 +127,8 @@ quay forward 8080:localhost:80 remote-host -R
 | `2` | SSH only |
 | `3` | Docker only |
 | `?` | Help |
-| `q` / `Esc` | Quit |
+| `Esc` | Clear search |
+| `q` | Quit |
 
 ## Screenshots
 

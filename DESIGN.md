@@ -175,7 +175,8 @@ ssh -f -N -L local_port:container_ip:container_port host
 | `c` | 接続マネージャ |
 | `h` | 前の接続に切替 |
 | `l` | 次の接続に切替 |
-| `q` / `Esc` | 終了 |
+| `Esc` | 検索クリア |
+| `q` | 終了 |
 | `?` | ヘルプ表示 |
 
 ## ファイル構成
