@@ -3,9 +3,8 @@ use crate::connection::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::net::TcpStream;
+use std::net::TcpListener;
 use std::path::PathBuf;
-use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForwardMapping {
@@ -95,11 +94,7 @@ impl Forwards {
 }
 
 pub fn is_port_listening(port: u16) -> bool {
-    let addr = format!("127.0.0.1:{port}");
-    let Ok(socket_addr) = addr.parse() else {
-        return false;
-    };
-    TcpStream::connect_timeout(&socket_addr, Duration::from_millis(200)).is_ok()
+    TcpListener::bind(("127.0.0.1", port)).is_err()
 }
 
 #[cfg(test)]
