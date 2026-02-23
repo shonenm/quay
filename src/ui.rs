@@ -114,12 +114,19 @@ fn draw_filter_bar(frame: &mut Frame, app: &App, area: Rect) {
             ]
         }
         InputMode::Normal => {
-            vec![
+            let mut spans = vec![
                 Span::raw("Filter: "),
                 Span::styled(filter_text, theme::success()),
                 auto_refresh_indicator,
-                Span::raw("  [/] search  [?] help"),
-            ]
+            ];
+            if !app.search_query.is_empty() {
+                spans.push(Span::styled(
+                    format!("  Search: \"{}\"", app.search_query),
+                    Style::default().fg(theme::ACCENT),
+                ));
+            }
+            spans.push(Span::raw("  [/] search  [?] help"));
+            spans
         }
     };
 
