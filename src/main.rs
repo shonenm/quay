@@ -1169,6 +1169,10 @@ pub(crate) async fn run_tui_with_entries(
                             app.connection_popup_mode = ConnectionPopupMode::List;
                             app.popup = Popup::Connections;
                         }
+                        Action::ClearSearch => {
+                            app.search_query.clear();
+                            app.apply_filter();
+                        }
                         Action::SubmitForward
                         | Action::LaunchPreset
                         | Action::SelectRow(_)

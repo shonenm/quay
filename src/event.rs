@@ -9,7 +9,8 @@ pub enum AppEvent {
 
 pub fn handle_key(key: KeyEvent) -> Option<Action> {
     match key.code {
-        KeyCode::Char('q') | KeyCode::Esc => Some(Action::Quit),
+        KeyCode::Char('q') => Some(Action::Quit),
+        KeyCode::Esc => Some(Action::ClearSearch),
         KeyCode::Char('j') | KeyCode::Down => Some(Action::Down),
         KeyCode::Char('k') | KeyCode::Up => Some(Action::Up),
         KeyCode::Char('g') | KeyCode::Home => Some(Action::First),
@@ -226,6 +227,7 @@ pub enum Action {
     AddConnection,
     DeleteConnection,
     SubmitConnection,
+    ClearSearch,
 }
 
 #[cfg(test)]
