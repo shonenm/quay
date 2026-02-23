@@ -371,10 +371,7 @@ impl App {
             // Persist newly detected mappings from collect_all() (lsof+probe)
             for entry in &entries {
                 if let Some(fwd) = entry.forwarded_port {
-                    let map = self
-                        .ssh_forwards
-                        .entry(self.active_connection)
-                        .or_default();
+                    let map = self.ssh_forwards.entry(self.active_connection).or_default();
                     if map.get(&entry.local_port) != Some(&fwd) {
                         map.insert(entry.local_port, fwd);
                         forwards_changed = true;
@@ -488,8 +485,7 @@ impl App {
 
     pub fn connection_next(&mut self) {
         if !self.connections.is_empty() {
-            self.connection_selected =
-                (self.connection_selected + 1) % self.connections.len();
+            self.connection_selected = (self.connection_selected + 1) % self.connections.len();
         }
     }
 

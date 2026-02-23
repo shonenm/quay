@@ -1,4 +1,4 @@
-use crate::port::{dedup_entries, PortEntry, PortSource};
+use crate::port::{PortEntry, PortSource, dedup_entries};
 use anyhow::Result;
 
 #[allow(clippy::too_many_lines)]

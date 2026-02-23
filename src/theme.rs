@@ -38,7 +38,9 @@ pub fn error_bold() -> Style {
 
 pub fn cursor(valid: bool) -> Style {
     let color = if valid { ACCENT } else { ERROR };
-    Style::default().fg(color).add_modifier(Modifier::SLOW_BLINK)
+    Style::default()
+        .fg(color)
+        .add_modifier(Modifier::SLOW_BLINK)
 }
 
 pub fn row_highlight() -> Style {

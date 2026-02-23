@@ -139,8 +139,7 @@ async fn probe_open_ports(entries: &mut [PortEntry], remote_mode: bool) {
     for port in probe_ports {
         handles.push(tokio::spawn(async move {
             let addr = format!("127.0.0.1:{port}");
-            let result =
-                tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect(&addr)).await;
+            let result = tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect(&addr)).await;
             (port, result.is_ok() && result.unwrap().is_ok())
         }));
     }
@@ -158,7 +157,6 @@ async fn probe_open_ports(entries: &mut [PortEntry], remote_mode: bool) {
         }
     }
 }
-
 
 pub async fn collect_all(
     remote_host: Option<&str>,
@@ -197,7 +195,8 @@ pub async fn collect_all(
                 already_forwarded.insert(local_port);
             }
             let container_ports: HashSet<u16> = e.iter().map(|entry| entry.local_port).collect();
-            let ssh_ports: Vec<u16> = ssh::get_ssh_master_listening_ports(host).await
+            let ssh_ports: Vec<u16> = ssh::get_ssh_master_listening_ports(host)
+                .await
                 .into_iter()
                 .filter(|p| !already_forwarded.contains(p))
                 .collect();
@@ -244,10 +243,12 @@ pub async fn kill_by_pid(pid: u32, remote_host: Option<&str>) -> anyhow::Result<
     let pid_str = pid.to_string();
     let status = match remote_host {
         Some(host) => ssh_cmd_tokio(host, &["kill", &pid_str]).status().await?,
-        None => tokio::process::Command::new("kill")
-            .arg(&pid_str)
-            .status()
-            .await?,
+        None => {
+            tokio::process::Command::new("kill")
+                .arg(&pid_str)
+                .status()
+                .await?
+        }
     };
     if status.success() {
         Ok(())
@@ -287,10 +288,12 @@ pub async fn kill_by_port(port: u16, remote_host: Option<&str>) -> anyhow::Resul
                             .status()
                             .await?
                     }
-                    None => tokio::process::Command::new("docker")
-                        .args(["stop", container_id])
-                        .status()
-                        .await?,
+                    None => {
+                        tokio::process::Command::new("docker")
+                            .args(["stop", container_id])
+                            .status()
+                            .await?
+                    }
                 };
                 if status.success() {
                     Ok(())
@@ -383,13 +386,11 @@ mod tests {
         // SSH tunnel: local_port=3000, remote_port=8080 (forwards to container port 8080)
         // Without the fix, probing 127.0.0.1:3000 would succeed (tunnel listens there)
         // and Docker port 3000 would be marked open — a false positive.
-        let ssh_entries = vec![
-            {
-                let mut e = make_entry(PortSource::Ssh, 3000);
-                e.remote_port = Some(8080);
-                e
-            },
-        ];
+        let ssh_entries = vec![{
+            let mut e = make_entry(PortSource::Ssh, 3000);
+            e.remote_port = Some(8080);
+            e
+        }];
 
         // Apply the same merge logic as collect_all() remote mode: match on remote_port only
         let ssh_port_map: HashMap<u16, u16> = ssh_entries

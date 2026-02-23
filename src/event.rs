@@ -145,10 +145,7 @@ pub fn handle_connection_key(key: KeyEvent) -> Option<Action> {
     }
 }
 
-pub fn handle_connection_input_key(
-    key: KeyEvent,
-    input: &mut ConnectionInput,
-) -> Option<Action> {
+pub fn handle_connection_input_key(key: KeyEvent, input: &mut ConnectionInput) -> Option<Action> {
     match key.code {
         KeyCode::Esc => Some(Action::ClosePopup),
         KeyCode::Enter => {

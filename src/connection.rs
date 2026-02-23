@@ -183,10 +183,7 @@ docker_target = "syntopic-dev"
         );
         assert!(conns.connection[0].docker_target.is_none());
         assert_eq!(conns.connection[1].name, "AI Lab + Docker");
-        assert_eq!(
-            conns.connection[1].remote_host,
-            Some("ailab".to_string())
-        );
+        assert_eq!(conns.connection[1].remote_host, Some("ailab".to_string()));
         assert_eq!(
             conns.connection[1].docker_target,
             Some("syntopic-dev".to_string())

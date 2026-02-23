@@ -9,10 +9,12 @@ pub async fn collect(remote_host: Option<&str>) -> Result<Vec<PortEntry>> {
                 .output()
                 .await?
         }
-        None => Command::new("lsof")
-            .args(["-i", "-P", "-n", "-sTCP:LISTEN", "-Fcpn"])
-            .output()
-            .await?,
+        None => {
+            Command::new("lsof")
+                .args(["-i", "-P", "-n", "-sTCP:LISTEN", "-Fcpn"])
+                .output()
+                .await?
+        }
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);

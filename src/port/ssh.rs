@@ -32,7 +32,16 @@ fn get_control_master_pid(host: &str) -> Option<u32> {
 fn get_listening_ports_for_pid(pid: u32) -> Vec<u16> {
     let pid_str = pid.to_string();
     let output = match std::process::Command::new("lsof")
-        .args(["-a", "-P", "-n", "-iTCP", "-sTCP:LISTEN", "-p", &pid_str, "-Fn"])
+        .args([
+            "-a",
+            "-P",
+            "-n",
+            "-iTCP",
+            "-sTCP:LISTEN",
+            "-p",
+            &pid_str,
+            "-Fn",
+        ])
         .output()
     {
         Ok(o) if o.status.success() => o,

@@ -1,4 +1,6 @@
-use crate::app::{App, ConnectionField, ConnectionPopupMode, Filter, ForwardField, InputMode, Popup};
+use crate::app::{
+    App, ConnectionField, ConnectionPopupMode, Filter, ForwardField, InputMode, Popup,
+};
 use crate::theme;
 use ratatui::{
     Frame,
@@ -139,26 +141,11 @@ fn draw_empty_state(frame: &mut Frame, app: &App, area: Rect) {
 
     let mut lines = vec![
         Line::from(""),
-        Line::from(Span::styled(
-            r"   __ _ _   _  __ _ _   _ ",
-            theme::title(),
-        )),
-        Line::from(Span::styled(
-            r"  / _` | | | |/ _` | | | |",
-            theme::title(),
-        )),
-        Line::from(Span::styled(
-            r" | (_| | |_| | (_| | |_| |",
-            theme::title(),
-        )),
-        Line::from(Span::styled(
-            r"  \__, |\__,_|\__,_|\__, |",
-            theme::title(),
-        )),
-        Line::from(Span::styled(
-            r"     |_|             |_| ",
-            theme::title(),
-        )),
+        Line::from(Span::styled(r"   __ _ _   _  __ _ _   _ ", theme::title())),
+        Line::from(Span::styled(r"  / _` | | | |/ _` | | | |", theme::title())),
+        Line::from(Span::styled(r" | (_| | |_| | (_| | |_| |", theme::title())),
+        Line::from(Span::styled(r"  \__, |\__,_|\__,_|\__, |", theme::title())),
+        Line::from(Span::styled(r"     |_|             |_| ", theme::title())),
         Line::from(""),
         Line::from(Span::styled(format!("v{version}"), theme::muted())),
         Line::from(""),
@@ -167,28 +154,38 @@ fn draw_empty_state(frame: &mut Frame, app: &App, area: Rect) {
     let hints = if app.loading {
         const SPINNER: &[&str] = &["|", "/", "-", "\\"];
         let frame = SPINNER[app.tick_count as usize % SPINNER.len()];
-        vec![
-            Line::from(vec![
-                Span::styled(format!("{frame} "), Style::default().fg(theme::BRAND)),
-                Span::styled("Loading...", Style::default().fg(Color::White)),
-            ]),
-        ]
+        vec![Line::from(vec![
+            Span::styled(format!("{frame} "), Style::default().fg(theme::BRAND)),
+            Span::styled("Loading...", Style::default().fg(Color::White)),
+        ])]
     } else if app.search_query.is_empty() {
         match app.filter {
             Filter::All => vec![
-                Line::from(Span::styled("No ports found", Style::default().fg(Color::White))),
+                Line::from(Span::styled(
+                    "No ports found",
+                    Style::default().fg(Color::White),
+                )),
                 Line::from(Span::styled("[r] Refresh  [?] Help", theme::muted())),
             ],
             Filter::Local => vec![
-                Line::from(Span::styled("No Local ports found", Style::default().fg(Color::White))),
+                Line::from(Span::styled(
+                    "No Local ports found",
+                    Style::default().fg(Color::White),
+                )),
                 Line::from(Span::styled("[0] Show all  [r] Refresh", theme::muted())),
             ],
             Filter::Ssh => vec![
-                Line::from(Span::styled("No SSH ports found", Style::default().fg(Color::White))),
+                Line::from(Span::styled(
+                    "No SSH ports found",
+                    Style::default().fg(Color::White),
+                )),
                 Line::from(Span::styled("[0] Show all  [r] Refresh", theme::muted())),
             ],
             Filter::Docker => vec![
-                Line::from(Span::styled("No Docker ports found", Style::default().fg(Color::White))),
+                Line::from(Span::styled(
+                    "No Docker ports found",
+                    Style::default().fg(Color::White),
+                )),
                 Line::from(Span::styled("[0] Show all  [r] Refresh", theme::muted())),
             ],
         }
@@ -451,7 +448,10 @@ fn draw_help_popup(frame: &mut Frame, app: &App) {
 
     if app.is_docker_target() {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled("Docker Target", theme::highlight())));
+        lines.push(Line::from(Span::styled(
+            "Docker Target",
+            theme::highlight(),
+        )));
         lines.push(Line::from("  Container ports discovered via ss"));
         if let Some(ref ip) = app.container_ip {
             lines.push(Line::from(format!("  Container IP: {ip}")));
@@ -707,10 +707,7 @@ fn draw_connection_add_form(frame: &mut Frame, app: &App, area: Rect) {
             cursor(ConnectionField::Name),
         ]),
         Line::from(vec![
-            Span::styled(
-                "Remote Host:    ",
-                field_style(ConnectionField::RemoteHost),
-            ),
+            Span::styled("Remote Host:    ", field_style(ConnectionField::RemoteHost)),
             Span::styled(
                 input.remote_host.as_str(),
                 field_style(ConnectionField::RemoteHost),

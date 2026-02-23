@@ -13,7 +13,12 @@ pub async fn collect(remote_host: Option<&str>) -> Result<Vec<PortEntry>> {
         Some(host) => {
             match ssh_cmd_tokio(
                 host,
-                &["docker", "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Ports}}"],
+                &[
+                    "docker",
+                    "ps",
+                    "--format",
+                    "{{.ID}}\t{{.Names}}\t{{.Ports}}",
+                ],
             )
             .output()
             .await
@@ -256,10 +261,12 @@ pub async fn get_container_ip(container: &str, remote_host: Option<&str>) -> Res
                 .output()
                 .await?
         }
-        None => Command::new("docker")
-            .args(["inspect", "-f", inspect_fmt, container])
-            .output()
-            .await?,
+        None => {
+            Command::new("docker")
+                .args(["inspect", "-f", inspect_fmt, container])
+                .output()
+                .await?
+        }
     };
 
     if !output.status.success() {

@@ -2,8 +2,8 @@ mod app;
 mod config;
 mod connection;
 mod dev;
-mod forward;
 mod event;
+mod forward;
 mod port;
 mod preset;
 mod theme;
@@ -18,9 +18,8 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use event::{
-    Action, AppEvent, handle_connection_input_key, handle_connection_key,
-    handle_forward_key, handle_key, handle_mouse, handle_popup_key, handle_preset_key,
-    handle_search_key,
+    Action, AppEvent, handle_connection_input_key, handle_connection_key, handle_forward_key,
+    handle_key, handle_mouse, handle_popup_key, handle_preset_key, handle_search_key,
 };
 use futures::StreamExt;
 use port::PortEntry;
@@ -64,9 +63,15 @@ async fn resolve_container_ip(app: &mut App) {
 
 #[allow(clippy::unused_async)]
 async fn restore_forwards(app: &mut App) {
-    let Some(host) = app.remote_host.clone() else { return };
-    let Some(forwards) = app.ssh_forwards.get(&app.active_connection).cloned() else { return };
-    if forwards.is_empty() { return; }
+    let Some(host) = app.remote_host.clone() else {
+        return;
+    };
+    let Some(forwards) = app.ssh_forwards.get(&app.active_connection).cloned() else {
+        return;
+    };
+    if forwards.is_empty() {
+        return;
+    }
 
     let remote_target = if app.is_docker_target() {
         match app.container_ip.as_deref() {
@@ -104,8 +109,10 @@ fn activate_connection_ui(app: &mut App) {
     app.apply_filter();
     app.selected = 0;
     app.loading = true;
-    let name = app.active_connection()
-        .map_or("Unknown", |c| c.name.as_str()).to_string();
+    let name = app
+        .active_connection()
+        .map_or("Unknown", |c| c.name.as_str())
+        .to_string();
     app.set_status(&format!("Switched to: {name}"));
 }
 
@@ -197,7 +204,12 @@ async fn run_activation(input: ActivationInput) -> ActivationResult {
     let restore_status = if let (Some(ref host), Some(ref forwards)) =
         (&input.remote_host, &input.ssh_forwards_for_conn)
     {
-        restore_forwards_standalone(host, forwards, input.is_docker_target, container_ip.as_deref())
+        restore_forwards_standalone(
+            host,
+            forwards,
+            input.is_docker_target,
+            container_ip.as_deref(),
+        )
     } else {
         None
     };
@@ -297,7 +309,12 @@ fn spawn_refresh(
             &known_forwards,
         )
         .await;
-        let _ = tx.send(RefreshResult { active_connection, entries }).await;
+        let _ = tx
+            .send(RefreshResult {
+                active_connection,
+                entries,
+            })
+            .await;
     }));
 }
 
@@ -430,16 +447,17 @@ fn handle_kill_action(
                 if let Some(ref target) = docker_target {
                     let pid_str = pid.to_string();
                     let result = match remote_host.as_deref() {
-                        Some(host) => port::ssh_cmd_tokio(
-                            host,
-                            &["docker", "exec", target, "kill", &pid_str],
-                        )
-                        .status()
-                        .await,
-                        None => tokio::process::Command::new("docker")
-                            .args(["exec", target, "kill", &pid_str])
-                            .status()
-                            .await,
+                        Some(host) => {
+                            port::ssh_cmd_tokio(host, &["docker", "exec", target, "kill", &pid_str])
+                                .status()
+                                .await
+                        }
+                        None => {
+                            tokio::process::Command::new("docker")
+                                .args(["exec", target, "kill", &pid_str])
+                                .status()
+                                .await
+                        }
                     };
                     matches!(result, Ok(status) if status.success())
                 } else {
@@ -449,11 +467,7 @@ fn handle_kill_action(
                 false
             }
         } else {
-            let kill_host = if is_ssh {
-                None
-            } else {
-                remote_host.as_deref()
-            };
+            let kill_host = if is_ssh { None } else { remote_host.as_deref() };
             port::kill_by_port(port, kill_host).await.is_ok()
         };
 
@@ -538,9 +552,7 @@ fn handle_quick_forward(app: &mut App, mock_mode: bool) -> bool {
                     .or_default()
                     .insert(port, port);
                 save_forwards(app);
-                app.set_status(&format!(
-                    "Forward :{port} -> {host}:{port} (PID: {pid})"
-                ));
+                app.set_status(&format!("Forward :{port} -> {host}:{port} (PID: {pid})"));
                 true
             }
             Err(e) => {
@@ -917,7 +929,12 @@ pub(crate) async fn run_tui_with_entries(
                             Action::SubmitForward => {
                                 let needs_refresh = handle_submit_forward(&mut app, mock_mode);
                                 if needs_refresh {
-                                    spawn_refresh(&app, &mut refresh_handle, activation_handle.as_ref(), &refresh_tx);
+                                    spawn_refresh(
+                                        &app,
+                                        &mut refresh_handle,
+                                        activation_handle.as_ref(),
+                                        &refresh_tx,
+                                    );
                                 }
                             }
                             _ => {}
@@ -949,7 +966,12 @@ pub(crate) async fn run_tui_with_entries(
                                             app.set_status(&format!(
                                                 "Forward created (PID: {pid})"
                                             ));
-                                            spawn_refresh(&app, &mut refresh_handle, activation_handle.as_ref(), &refresh_tx);
+                                            spawn_refresh(
+                                                &app,
+                                                &mut refresh_handle,
+                                                activation_handle.as_ref(),
+                                                &refresh_tx,
+                                            );
                                         }
                                         Err(e) => {
                                             app.set_status(&format!("Forward failed: {e}"));
@@ -983,11 +1005,8 @@ pub(crate) async fn run_tui_with_entries(
                                         if let Err(e) = stored_connections.save() {
                                             app.set_status(&format!("Save failed: {e}"));
                                         } else {
-                                            app.connections =
-                                                stored_connections.all_with_local();
-                                            app.set_status(&format!(
-                                                "Added connection: {name}"
-                                            ));
+                                            app.connections = stored_connections.all_with_local();
+                                            app.set_status(&format!("Added connection: {name}"));
                                         }
                                         app.connection_popup_mode = ConnectionPopupMode::List;
                                         app.reset_connection_input();
@@ -1007,7 +1026,12 @@ pub(crate) async fn run_tui_with_entries(
                                 app.active_connection = app.connection_selected;
                                 activate_connection_ui(&mut app);
                                 if !mock_mode {
-                                    spawn_activation(&app, &mut activation_handle, &mut refresh_handle, &activation_tx);
+                                    spawn_activation(
+                                        &app,
+                                        &mut activation_handle,
+                                        &mut refresh_handle,
+                                        &activation_tx,
+                                    );
                                 }
                                 app.popup = Popup::None;
                             }
@@ -1028,8 +1052,7 @@ pub(crate) async fn run_tui_with_entries(
                                         if let Err(e) = stored_connections.save() {
                                             app.set_status(&format!("Save failed: {e}"));
                                         } else {
-                                            app.connections =
-                                                stored_connections.all_with_local();
+                                            app.connections = stored_connections.all_with_local();
                                             // Adjust active_connection if needed
                                             if app.active_connection >= app.connections.len() {
                                                 app.active_connection =
@@ -1047,9 +1070,7 @@ pub(crate) async fn run_tui_with_entries(
                                                 app.connection_selected =
                                                     app.connections.len().saturating_sub(1);
                                             }
-                                            app.set_status(&format!(
-                                                "Deleted connection: {name}"
-                                            ));
+                                            app.set_status(&format!("Deleted connection: {name}"));
                                         }
                                     }
                                 }
@@ -1098,7 +1119,12 @@ pub(crate) async fn run_tui_with_entries(
                         Action::Refresh => {
                             if !mock_mode {
                                 app.loading = true;
-                                spawn_refresh(&app, &mut refresh_handle, activation_handle.as_ref(), &refresh_tx);
+                                spawn_refresh(
+                                    &app,
+                                    &mut refresh_handle,
+                                    activation_handle.as_ref(),
+                                    &refresh_tx,
+                                );
                                 app.set_status("Refreshing...");
                             }
                         }
@@ -1151,17 +1177,32 @@ pub(crate) async fn run_tui_with_entries(
                         Action::QuickForward => {
                             let needs_refresh = handle_quick_forward(&mut app, mock_mode);
                             if needs_refresh {
-                                spawn_refresh(&app, &mut refresh_handle, activation_handle.as_ref(), &refresh_tx);
+                                spawn_refresh(
+                                    &app,
+                                    &mut refresh_handle,
+                                    activation_handle.as_ref(),
+                                    &refresh_tx,
+                                );
                             }
                         }
                         Action::PrevConnection => {
                             if handle_connection_switch(&mut app, -1, mock_mode) {
-                                spawn_activation(&app, &mut activation_handle, &mut refresh_handle, &activation_tx);
+                                spawn_activation(
+                                    &app,
+                                    &mut activation_handle,
+                                    &mut refresh_handle,
+                                    &activation_tx,
+                                );
                             }
                         }
                         Action::NextConnection => {
                             if handle_connection_switch(&mut app, 1, mock_mode) {
-                                spawn_activation(&app, &mut activation_handle, &mut refresh_handle, &activation_tx);
+                                spawn_activation(
+                                    &app,
+                                    &mut activation_handle,
+                                    &mut refresh_handle,
+                                    &activation_tx,
+                                );
                             }
                         }
                         Action::ShowConnections => {
@@ -1211,7 +1252,12 @@ pub(crate) async fn run_tui_with_entries(
             AppEvent::Tick => {
                 app.tick();
                 if !mock_mode && app.should_refresh() {
-                    spawn_refresh(&app, &mut refresh_handle, activation_handle.as_ref(), &refresh_tx);
+                    spawn_refresh(
+                        &app,
+                        &mut refresh_handle,
+                        activation_handle.as_ref(),
+                        &refresh_tx,
+                    );
                 }
             }
         }
