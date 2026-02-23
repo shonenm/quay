@@ -9,11 +9,11 @@ Quay is a TUI port manager that displays local processes, SSH port forwards, and
 │                        main.rs                              │
 │                    (CLI + TUI entry)                        │
 ├─────────────────────────────────────────────────────────────┤
-│     app.rs      │     event.rs      │       ui.rs          │
-│  (App State)    │  (Event Handling) │   (UI Rendering)     │
+│   app.rs    │   event.rs    │    ui.rs     │   theme.rs   │
+│ (App State) │(Event Handle) │(UI Rendering)│  (Styles)    │
 ├─────────────────────────────────────────────────────────────┤
-│   config.rs     │  connection.rs  │    preset.rs              │
-│  (Settings)     │ (Connections)   │   (SSH Presets)           │
+│   config.rs   │ connection.rs │  forward.rs  │  preset.rs   │
+│  (Settings)   │ (Connections) │ (Fwd Persist)│ (SSH Presets)│
 ├─────────────────────────────────────────────────────────────┤
 │                       port/                                 │
 │    local.rs    │    docker.rs    │      ssh.rs             │
@@ -35,7 +35,9 @@ src/
 ├── config.rs         # Configuration file handling
 ├── connection.rs     # Connection manager (load/save/add/remove)
 ├── event.rs          # Keyboard/mouse event handling
+├── forward.rs        # SSH forward persistence (forwards.toml, ControlMaster detection)
 ├── preset.rs         # SSH forward presets
+├── theme.rs          # Theme/style definitions
 ├── ui.rs             # UI rendering with ratatui
 ├── port/
 │   ├── mod.rs        # PortEntry, PortSource, collect_all(remote_host, docker_target)
@@ -66,6 +68,7 @@ pub struct PortEntry {
     pub ssh_host: Option<String>,
     pub is_open: bool,
     pub is_loopback: bool,           // 127.0.0.1 bind (docker target)
+    pub forwarded_port: Option<u16>, // forwarded local port
 }
 ```
 
@@ -96,6 +99,8 @@ pub struct App {
     pub connection_selected: usize,       // Selected in popup
     pub connection_input: ConnectionInput,// Add-new form state
     pub connection_popup_mode: ConnectionPopupMode, // List|AddNew
+    pub ssh_forwards: HashMap<usize, HashMap<u16, u16>>, // connection → (container_port → local_port)
+    pub loading: bool,                 // Loading state (spinner UI)
 }
 
 pub struct ForwardInput {
@@ -131,16 +136,23 @@ pub struct ForwardInput {
                          ↓
                app.set_entries()
 
-2. Event Loop
-   event_handler.next() → KeyEvent
-                              ↓
-                    handle_key() / handle_popup_key()
-                              ↓
-                          Action
-                              ↓
-                    app state mutation
-                              ↓
-                    ui::draw(&app)
+2. Event Loop (async, tokio::select!)
+   ┌─────────────────────────────────────────────────┐
+   │ tokio::select! {                                │
+   │   event = EventStream::next() → Key/Mouse       │
+   │   result = activation_rx.recv() → ActivationResult│
+   │   result = refresh_rx.recv() → RefreshResult     │
+   │   _ = tick_interval.tick() → Tick                │
+   │ }                                               │
+   └─────────────────────────────────────────────────┘
+   Key/Mouse → handle_key() / handle_popup_key() → app state mutation
+   ActivationResult → apply_activation_result() → set_entries()
+   RefreshResult → apply_refresh_result() → set_entries()
+   Tick → app.tick() + conditional refresh
+
+   Background tasks:
+   - spawn_activation(): port collection + container IP on connection switch
+   - spawn_refresh(): periodic port re-collection
 ```
 
 ## Port Collection
@@ -247,13 +259,15 @@ Popup rendering uses `centered_rect()` for modal positioning.
 | Crate | Purpose |
 |-------|---------|
 | ratatui | Terminal UI framework |
-| crossterm | Terminal manipulation |
+| crossterm | Terminal manipulation (with event-stream) |
 | clap | CLI argument parsing |
 | tokio | Async runtime |
+| futures | Stream utilities for EventStream |
 | regex | Port string parsing |
 | anyhow | Error handling |
 | toml | Config file parsing |
-| dirs | Config directory paths |
+| user_dirs | Config directory paths (XDG_CONFIG_HOME support) |
+| shell-escape | Safe shell argument escaping |
 
 ## Dev Scenario Flow
 
@@ -368,3 +382,33 @@ Parse rules:
 - IPv4/IPv6 deduplication via HashSet
 - `*:port` and `0.0.0.0:port` → forwardable (`is_loopback: false`)
 - `127.0.0.1:port` → loopback-only (`is_loopback: true`)
+
+## Forward Persistence Flow
+
+SSH forward mappings (container_port → local_port) are persisted per connection in `~/.config/quay/forwards.toml`:
+
+```
+1. Quick Forward (F key) or Forward Form (f key)
+   ssh -f -N -L local_port:remote:remote_port host
+       ↓
+   app.ssh_forwards[connection] += (container_port → local_port)
+       ↓
+   forward::save_forwards() → forwards.toml
+
+2. Startup / Connection Switch (spawn_activation)
+   forward::load_forwards() → app.ssh_forwards
+       ↓
+   For each persisted mapping:
+     forward::detect_controlmaster_forward(host, local_port)
+       → check SSH ControlMaster socket + TcpListener::bind probe
+       ↓
+     If alive → set PortEntry.forwarded_port
+     If dead  → remove from ssh_forwards, save
+
+3. Refresh (spawn_refresh)
+   collect_all() detects new forwards via lsof + probe
+       ↓
+   app.set_entries() merges into ssh_forwards
+       ↓
+   forward::save_forwards() if changed
+```

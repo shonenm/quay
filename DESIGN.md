@@ -26,7 +26,8 @@
 | プリセット | SSH転送テンプレートをワンキーで起動 |
 | 接続マネージャ | 複数ホスト (Local/Remote/Docker) を `c` で管理、`h`/`l` で切替 |
 | マウスサポート | クリック・スクロール操作（設定で有効化） |
-| 設定ファイル | auto_refresh, refresh_interval, default_filter, remote_host, docker_target, mouse_enabled, connections.toml |
+| フォワード永続化 | SSH フォワードマッピングを `forwards.toml` に永続化、ControlMaster 検出、起動時復元 |
+| 設定ファイル | auto_refresh, refresh_interval, default_filter, remote_host, docker_target, mouse_enabled, connections.toml, forwards.toml |
 
 ## データモデル
 
@@ -51,6 +52,7 @@ pub struct PortEntry {
     pub ssh_host: Option<String>,       // SSH転送のホスト
     pub is_open: bool,                  // TCP probe 結果 (リモートモード時はlsof結果を信頼)
     pub is_loopback: bool,             // 127.0.0.1 バインド (Docker ターゲット時)
+    pub forwarded_port: Option<u16>,   // フォワード済みローカルポート
 }
 ```
 
@@ -79,9 +81,9 @@ n*:3000     # Network address
 ps aux | grep 'ssh.*-[LR]'
 ```
 
-または状態ファイルで管理:
+または設定ファイルで管理:
 ```
-~/.local/state/quay/ssh_forwards.json
+~/.config/quay/forwards.toml
 ```
 
 ### Docker Ports
@@ -191,7 +193,9 @@ quay/
     ├── app.rs            # アプリケーション状態
     ├── config.rs         # 設定ファイル処理
     ├── connection.rs     # 接続マネージャ (load/save/add/remove)
+    ├── forward.rs        # SSHフォワード永続化 (forwards.toml, ControlMaster検出)
     ├── preset.rs         # SSHフォワードプリセット
+    ├── theme.rs          # テーマ/スタイル定義
     ├── ui.rs             # UI描画
     ├── event.rs          # キーボード・マウスイベント処理
     ├── port/
@@ -338,6 +342,20 @@ quay dev check 3000 8080        # ポート開閉チェック
     - ヘッダーにタブ風表示、draw_connections_popup, draw_connection_add_form
     - Help に Connections セクション、Footer に [h/l] Switch
 43. [x] Mock モードにサンプル接続追加 (main.rs)
+
+### Phase 10: フォワード永続化・非同期アーキテクチャ
+44. [x] フォワード永続化 (forward.rs)
+    - `~/.config/quay/forwards.toml` で SSH フォワードマッピングを永続化
+    - SSH ControlMaster ソケット検出による既存フォワード復元
+    - 起動時に永続化済みフォワードを `PortEntry.forwarded_port` に反映
+45. [x] async アーキテクチャ移行 (main.rs)
+    - blocking event loop → `tokio::select!` + `crossterm::event::EventStream`
+    - `spawn_activation()` / `spawn_refresh()` でバックグラウンドタスク管理
+    - チャネル経由で結果を受信しメインループに反映
+46. [x] XDG_CONFIG_HOME 対応 (config.rs)
+    - macOS でも `XDG_CONFIG_HOME` 環境変数を尊重 (`dirs` → `user_dirs` に移行)
+47. [x] ローディング状態 UI (app.rs, ui.rs)
+    - `App.loading` フラグ + spinner アニメーション表示
 
 ## 参考
 

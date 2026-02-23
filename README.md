@@ -15,6 +15,7 @@ A TUI port manager for local processes, SSH forwards, and Docker containers.
 - **Quick Actions**: Kill processes or create SSH forwards directly from the interface
 - **Connection Manager**: Save and switch between multiple hosts (local, remote, Docker) via `c` key
 - **SSH Presets**: Save frequently used port forwards as presets for one-key launch
+- **Forward Persistence**: SSH forward mappings are saved to `forwards.toml` and restored on reconnect (ControlMaster detection)
 - **Mouse Support**: Click and scroll navigation (configurable)
 - **Configuration**: Customize auto-refresh interval, default filter, and more via `~/.config/quay/config.toml`
 - **CLI Support**: Non-interactive commands for scripting (`quay list --json`)
@@ -179,6 +180,16 @@ docker_target = "syntopic-dev"
 ```
 
 A "Local" connection is always available at index 0. Use `c` to open the connection manager, `h`/`l` to switch quickly.
+
+### forwards.toml
+
+Persisted SSH forward mappings per connection (auto-managed):
+
+```toml
+[connection.1]
+3000 = 3000
+5173 = 5173
+```
 
 ### presets.toml
 
