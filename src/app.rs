@@ -269,6 +269,7 @@ pub struct App {
     // SSH ControlMaster causes tunnel processes to exit,
     // making them invisible to ps aux-based detection.
     pub ssh_forwards: HashMap<usize, HashMap<u16, u16>>,
+    pub loading: bool,
 }
 
 impl App {
@@ -298,6 +299,7 @@ impl App {
             connection_input: ConnectionInput::new(),
             connection_popup_mode: ConnectionPopupMode::List,
             ssh_forwards: HashMap::new(),
+            loading: true,
         }
     }
 

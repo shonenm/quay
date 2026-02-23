@@ -1,10 +1,11 @@
 use crate::app::{App, ConnectionField, ConnectionPopupMode, Filter, ForwardField, InputMode, Popup};
+use crate::theme;
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState},
+    widgets::{Cell, Clear, Paragraph, Row, Table, TableState},
 };
 
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -43,24 +44,11 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         let total = app.connections.len();
 
         let mut spans = vec![
-            Span::styled(
-                "Quay  ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("\u{25c0} ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                conn_name,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" \u{25b6}", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("  [{index}/{total}]"),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled("\u{2693} Quay  ", theme::title()),
+            Span::styled("\u{25c0} ", theme::muted()),
+            Span::styled(conn_name, theme::highlight()),
+            Span::styled(" \u{25b6}", theme::muted()),
+            Span::styled(format!("  [{index}/{total}]"), theme::muted()),
         ];
 
         // Show remote/docker info
@@ -68,19 +56,19 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             (Some(host), Some(target)) => {
                 spans.push(Span::styled(
                     format!("  [remote: {host}] [docker: {target}]"),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme::BRAND),
                 ));
             }
             (Some(host), None) => {
                 spans.push(Span::styled(
                     format!("  [remote: {host}]"),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme::BRAND),
                 ));
             }
             (None, Some(target)) => {
                 spans.push(Span::styled(
                     format!("  [docker: {target}]"),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(theme::BRAND),
                 ));
             }
             (None, None) => {}
@@ -90,21 +78,16 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         let title_text = match (&app.remote_host, &app.docker_target) {
             (Some(host), Some(target)) => {
-                format!("Quay [remote: {host}] [docker: {target}]")
+                format!("\u{2693} Quay [remote: {host}] [docker: {target}]")
             }
-            (None, Some(target)) => format!("Quay [docker: {target}]"),
-            (Some(host), None) => format!("Quay [remote: {host}]"),
-            (None, None) => "Quay - Port Manager".to_string(),
+            (None, Some(target)) => format!("\u{2693} Quay [docker: {target}]"),
+            (Some(host), None) => format!("\u{2693} Quay [remote: {host}]"),
+            (None, None) => "\u{2693} Quay - Port Manager".to_string(),
         };
-        Line::from(Span::styled(
-            title_text,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ))
+        Line::from(Span::styled(title_text, theme::title()))
     };
 
-    let title = Paragraph::new(content).block(Block::default().borders(Borders::ALL));
+    let title = Paragraph::new(content).block(theme::plain_block());
     frame.render_widget(title, area);
 }
 
@@ -117,49 +100,118 @@ fn draw_filter_bar(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let auto_refresh_indicator = if app.auto_refresh {
-        Span::styled(" [A] Auto", Style::default().fg(Color::Green))
+        Span::styled(" [A] Auto", theme::success())
     } else {
-        Span::styled(" [a] auto", Style::default().fg(Color::DarkGray))
+        Span::styled(" [a] auto", theme::muted())
     };
 
     let content = match app.input_mode {
         InputMode::Search => {
             vec![
                 Span::raw("Search: "),
-                Span::styled(&app.search_query, Style::default().fg(Color::Yellow)),
-                Span::styled(
-                    "_",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::SLOW_BLINK),
-                ),
+                Span::styled(&app.search_query, Style::default().fg(theme::ACCENT)),
+                Span::styled("_", theme::cursor(true)),
             ]
         }
         InputMode::Normal => {
             vec![
                 Span::raw("Filter: "),
-                Span::styled(filter_text, Style::default().fg(Color::Green)),
+                Span::styled(filter_text, theme::success()),
                 auto_refresh_indicator,
                 Span::raw("  [/] search  [?] help"),
             ]
         }
     };
 
-    let paragraph =
-        Paragraph::new(Line::from(content)).block(Block::default().borders(Borders::ALL));
+    let paragraph = Paragraph::new(Line::from(content)).block(theme::plain_block());
+    frame.render_widget(paragraph, area);
+}
+
+fn draw_empty_state(frame: &mut Frame, app: &App, area: Rect) {
+    let version = env!("CARGO_PKG_VERSION");
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            r"   __ _ _   _  __ _ _   _ ",
+            theme::title(),
+        )),
+        Line::from(Span::styled(
+            r"  / _` | | | |/ _` | | | |",
+            theme::title(),
+        )),
+        Line::from(Span::styled(
+            r" | (_| | |_| | (_| | |_| |",
+            theme::title(),
+        )),
+        Line::from(Span::styled(
+            r"  \__, |\__,_|\__,_|\__, |",
+            theme::title(),
+        )),
+        Line::from(Span::styled(
+            r"     |_|             |_| ",
+            theme::title(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(format!("v{version}"), theme::muted())),
+        Line::from(""),
+    ];
+
+    let hints = if app.loading {
+        const SPINNER: &[&str] = &["|", "/", "-", "\\"];
+        let frame = SPINNER[app.tick_count as usize % SPINNER.len()];
+        vec![
+            Line::from(vec![
+                Span::styled(format!("{frame} "), Style::default().fg(theme::BRAND)),
+                Span::styled("Loading...", Style::default().fg(Color::White)),
+            ]),
+        ]
+    } else if app.search_query.is_empty() {
+        match app.filter {
+            Filter::All => vec![
+                Line::from(Span::styled("No ports found", Style::default().fg(Color::White))),
+                Line::from(Span::styled("[r] Refresh  [?] Help", theme::muted())),
+            ],
+            Filter::Local => vec![
+                Line::from(Span::styled("No Local ports found", Style::default().fg(Color::White))),
+                Line::from(Span::styled("[0] Show all  [r] Refresh", theme::muted())),
+            ],
+            Filter::Ssh => vec![
+                Line::from(Span::styled("No SSH ports found", Style::default().fg(Color::White))),
+                Line::from(Span::styled("[0] Show all  [r] Refresh", theme::muted())),
+            ],
+            Filter::Docker => vec![
+                Line::from(Span::styled("No Docker ports found", Style::default().fg(Color::White))),
+                Line::from(Span::styled("[0] Show all  [r] Refresh", theme::muted())),
+            ],
+        }
+    } else {
+        vec![
+            Line::from(Span::styled(
+                format!("No results for \"{}\"", app.search_query),
+                Style::default().fg(Color::White),
+            )),
+            Line::from(Span::styled("[Esc] Clear search", theme::muted())),
+        ]
+    };
+
+    lines.extend(hints);
+
+    let paragraph = Paragraph::new(lines)
+        .alignment(Alignment::Center)
+        .block(theme::block("Ports (0/0)"));
     frame.render_widget(paragraph, area);
 }
 
 fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
+    if app.filtered_entries.is_empty() {
+        draw_empty_state(frame, app, area);
+        return;
+    }
+
     let header_cells = ["TYPE", "LOCAL", "REMOTE", "PROCESS/CONTAINER"]
         .iter()
-        .map(|h| {
-            Cell::from(*h).style(
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )
-        });
+        .map(|h| Cell::from(*h).style(theme::highlight()));
     let header = Row::new(header_cells).height(1);
 
     let rows: Vec<Row> = app
@@ -167,23 +219,21 @@ fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .map(|entry| {
             let (indicator, color) = if app.docker_target.is_some() {
-                // Docker Target: all ports are listening (from ss -tln)
-                // Color indicates localhost accessibility
                 if entry.is_open {
-                    ("●", Color::Green)
+                    ("\u{25cf}", theme::SUCCESS)
                 } else {
-                    ("●", Color::Yellow)
+                    ("\u{25cf}", theme::ACCENT)
                 }
             } else if entry.is_open {
-                ("●", Color::Green)
+                ("\u{25cf}", theme::SUCCESS)
             } else {
-                ("○", Color::DarkGray)
+                ("\u{25cb}", theme::MUTED)
             };
             let local_cell = if let Some(fwd) = entry.forwarded_port {
                 Line::from(vec![
                     Span::styled(indicator, Style::default().fg(color)),
                     Span::raw(format!(" :{}", entry.local_port)),
-                    Span::styled(format!("→:{fwd}"), Style::default().fg(Color::Cyan)),
+                    Span::styled(format!("\u{2192}:{fwd}"), Style::default().fg(theme::BRAND)),
                 ])
             } else {
                 Line::from(vec![
@@ -214,12 +264,8 @@ fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
         ],
     )
     .header(header)
-    .block(Block::default().borders(Borders::ALL).title(title))
-    .row_highlight_style(
-        Style::default()
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD),
-    )
+    .block(theme::block(&title))
+    .row_highlight_style(theme::row_highlight())
     .highlight_symbol("> ");
 
     let mut state = TableState::default();
@@ -230,27 +276,35 @@ fn draw_table(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     // Show status message if present, otherwise show help text
     let content = if let Some((ref message, _)) = app.status_message {
-        Line::from(Span::styled(message, Style::default().fg(Color::Yellow)))
+        Line::from(Span::styled(message, Style::default().fg(theme::ACCENT)))
     } else {
-        let switch_hint = if app.has_multiple_connections() {
-            "[h/l] Switch  "
-        } else {
-            ""
-        };
-        let help_text = match app.input_mode {
-            InputMode::Search => "[Enter/Esc] Done  [Backspace] Delete".to_string(),
-            InputMode::Normal => {
-                if app.is_remote() || app.is_docker_target() {
-                    format!("{switch_hint}[j/k] Navigate  [Enter] Details  [F] Quick Forward  [f] Forward  [K] Kill  [?] Help  [q] Quit")
-                } else {
-                    format!("{switch_hint}[j/k] Navigate  [Enter] Details  [K] Kill  [f] Forward  [p] Presets  [?] Help  [q] Quit")
-                }
+        match app.input_mode {
+            InputMode::Search => {
+                let mut spans = Vec::new();
+                spans.extend(theme::key_hint("Enter/Esc", "Done"));
+                spans.extend(theme::key_hint("Backspace", "Delete"));
+                Line::from(spans)
             }
-        };
-        Line::from(Span::styled(
-            help_text,
-            Style::default().fg(Color::DarkGray),
-        ))
+            InputMode::Normal => {
+                let mut spans = Vec::new();
+                if app.has_multiple_connections() {
+                    spans.extend(theme::key_hint("h/l", "Switch"));
+                }
+                spans.extend(theme::key_hint("j/k", "Navigate"));
+                spans.extend(theme::key_hint("Enter", "Details"));
+                if app.is_remote() || app.is_docker_target() {
+                    spans.extend(theme::key_hint("F", "Quick Forward"));
+                }
+                spans.extend(theme::key_hint("f", "Forward"));
+                if !app.is_remote() && !app.is_docker_target() {
+                    spans.extend(theme::key_hint("p", "Presets"));
+                }
+                spans.extend(theme::key_hint("K", "Kill"));
+                spans.extend(theme::key_hint("?", "Help"));
+                spans.extend(theme::key_hint("q", "Quit"));
+                Line::from(spans)
+            }
+        }
     };
 
     let paragraph = Paragraph::new(content);
@@ -287,73 +341,69 @@ fn draw_details_popup(frame: &mut Frame, app: &App) {
 
     let is_docker_target = app.docker_target.is_some();
 
-    let (open_text, open_color) = if is_docker_target {
-        // Docker Target: all entries are listening (from ss -tln)
-        ("Yes", Color::Green)
-    } else if entry.is_open {
-        ("Yes", Color::Green)
+    let (open_text, open_color) = if is_docker_target || entry.is_open {
+        ("Yes", theme::SUCCESS)
     } else {
-        ("No", Color::DarkGray)
+        ("No", theme::MUTED)
     };
 
     let (accessible_text, accessible_color) = if entry.is_open {
-        ("Yes", Color::Green)
+        ("Yes", theme::SUCCESS)
     } else {
-        ("No", Color::Yellow)
+        ("No", theme::ACCENT)
     };
 
+    let label = Style::default().fg(theme::ACCENT);
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("Type: ", Style::default().fg(Color::Yellow)),
+            Span::styled("Type: ", label),
             Span::raw(entry.source.to_string()),
         ]),
         Line::from(vec![
-            Span::styled("Local Port: ", Style::default().fg(Color::Yellow)),
+            Span::styled("Local Port: ", label),
             Span::raw(format!("{}", entry.local_port)),
         ]),
         Line::from(vec![
-            Span::styled("Open: ", Style::default().fg(Color::Yellow)),
+            Span::styled("Open: ", label),
             Span::styled(open_text, Style::default().fg(open_color)),
         ]),
     ];
     if is_docker_target {
         lines.push(Line::from(vec![
-            Span::styled("Accessible: ", Style::default().fg(Color::Yellow)),
+            Span::styled("Accessible: ", label),
             Span::styled(accessible_text, Style::default().fg(accessible_color)),
         ]));
         if let Some(fwd) = entry.forwarded_port {
             lines.push(Line::from(vec![
-                Span::styled("Forwarded: ", Style::default().fg(Color::Yellow)),
-                Span::styled(format!("→ :{fwd}"), Style::default().fg(Color::Cyan)),
+                Span::styled("Forwarded: ", label),
+                Span::styled(
+                    format!("\u{2192} :{fwd}"),
+                    Style::default().fg(theme::BRAND),
+                ),
             ]));
         }
     }
     lines.extend([
         Line::from(vec![
-            Span::styled("Remote: ", Style::default().fg(Color::Yellow)),
+            Span::styled("Remote: ", label),
             Span::raw(entry.remote_display()),
         ]),
         Line::from(vec![
-            Span::styled("Process: ", Style::default().fg(Color::Yellow)),
+            Span::styled("Process: ", label),
             Span::raw(&entry.process_name),
         ]),
         Line::from(vec![
-            Span::styled("PID: ", Style::default().fg(Color::Yellow)),
+            Span::styled("PID: ", label),
             Span::raw(entry.pid.map_or_else(|| "-".to_string(), |p| p.to_string())),
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled("[Esc] ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Esc] ", theme::muted()),
             Span::raw("Close"),
         ]),
     ]);
 
-    let paragraph = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Details")
-            .style(Style::default().bg(Color::Black)),
-    );
+    let paragraph = Paragraph::new(lines).block(theme::popup_block("Details"));
     frame.render_widget(paragraph, area);
 }
 
@@ -361,53 +411,40 @@ fn draw_help_popup(frame: &mut Frame, app: &App) {
     let area = centered_rect(50, 70, frame.area());
     frame.render_widget(Clear, area);
 
+    let help_key = |key: &str, desc: &str| -> Line<'static> {
+        Line::from(vec![
+            Span::styled(format!("  {key:<10}"), Style::default().fg(theme::BRAND)),
+            Span::raw(desc.to_string()),
+        ])
+    };
+
     let mut lines = vec![
-        Line::from(Span::styled(
-            "Navigation",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  j/↓     Move down"),
-        Line::from("  k/↑     Move up"),
-        Line::from("  g/Home  Go to first"),
-        Line::from("  G/End   Go to last"),
+        Line::from(Span::styled("Navigation", theme::highlight())),
+        help_key("j/\u{2193}", "Move down"),
+        help_key("k/\u{2191}", "Move up"),
+        help_key("g/Home", "Go to first"),
+        help_key("G/End", "Go to last"),
         Line::from(""),
-        Line::from(Span::styled(
-            "Filtering",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  /       Search mode"),
-        Line::from("  0       Show all"),
-        Line::from("  1       Local only"),
-        Line::from("  2       SSH only"),
-        Line::from("  3       Docker only"),
+        Line::from(Span::styled("Filtering", theme::highlight())),
+        help_key("/", "Search mode"),
+        help_key("0", "Show all"),
+        help_key("1", "Local only"),
+        help_key("2", "SSH only"),
+        help_key("3", "Docker only"),
         Line::from(""),
-        Line::from(Span::styled(
-            "Actions",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  Enter   Show details"),
-        Line::from("  K       Kill process"),
-        Line::from("  f       New SSH forward"),
+        Line::from(Span::styled("Actions", theme::highlight())),
+        help_key("Enter", "Show details"),
+        help_key("K", "Kill process"),
+        help_key("f", "New SSH forward"),
     ];
 
     if app.is_remote() || app.is_docker_target() {
-        lines.push(Line::from("  F       Quick forward (same port)"));
+        lines.push(help_key("F", "Quick forward (same port)"));
     }
 
     if app.is_docker_target() {
         lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "Docker Target",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )));
+        lines.push(Line::from(Span::styled("Docker Target", theme::highlight())));
         lines.push(Line::from("  Container ports discovered via ss"));
         if let Some(ref ip) = app.container_ip {
             lines.push(Line::from(format!("  Container IP: {ip}")));
@@ -416,33 +453,23 @@ fn draw_help_popup(frame: &mut Frame, app: &App) {
     }
 
     lines.extend([
-        Line::from("  p       Show presets"),
-        Line::from("  r       Refresh"),
-        Line::from("  a       Toggle auto-refresh"),
-        Line::from("  q/Esc   Quit"),
+        help_key("p", "Show presets"),
+        help_key("r", "Refresh"),
+        help_key("a", "Toggle auto-refresh"),
+        help_key("q/Esc", "Quit"),
         Line::from(""),
-        Line::from(Span::styled(
-            "Connections",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from("  h       Previous connection"),
-        Line::from("  l       Next connection"),
-        Line::from("  c       Connection manager"),
+        Line::from(Span::styled("Connections", theme::highlight())),
+        help_key("h", "Previous connection"),
+        help_key("l", "Next connection"),
+        help_key("c", "Connection manager"),
         Line::from(""),
         Line::from(vec![
-            Span::styled("[Esc] ", Style::default().fg(Color::DarkGray)),
+            Span::styled("[Esc] ", theme::muted()),
             Span::raw("Close"),
         ]),
     ]);
 
-    let paragraph = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Help")
-            .style(Style::default().bg(Color::Black)),
-    );
+    let paragraph = Paragraph::new(lines).block(theme::popup_block("Help"));
     frame.render_widget(paragraph, area);
 }
 
@@ -467,43 +494,29 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
     let is_docker_target = app.is_docker_target();
 
     let field_style = |field: ForwardField| {
-        // In remote mode, SSH Host is locked/dimmed
         if is_remote && field == ForwardField::SshHost {
-            return Style::default().fg(Color::DarkGray);
+            return theme::muted();
         }
-        // In docker target mode, Remote Host is also locked (container IP)
         if is_docker_target && field == ForwardField::RemoteHost {
-            return Style::default().fg(Color::DarkGray);
+            return theme::muted();
         }
         let valid = field_valid(field);
         if field == active {
             if valid {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                theme::highlight()
             } else {
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                theme::error_bold()
             }
         } else if valid {
             Style::default().fg(Color::White)
         } else {
-            Style::default().fg(Color::Red)
+            theme::error()
         }
     };
 
     let cursor = |field: ForwardField| {
         if field == active {
-            let color = if field_valid(field) {
-                Color::Yellow
-            } else {
-                Color::Red
-            };
-            Span::styled(
-                "_",
-                Style::default()
-                    .fg(color)
-                    .add_modifier(Modifier::SLOW_BLINK),
-            )
+            Span::styled("_", theme::cursor(field_valid(field)))
         } else {
             Span::raw("")
         }
@@ -511,22 +524,20 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
 
     let footer = if input.is_valid() {
         Line::from(Span::styled(
-            "Tab/↑↓: Switch field  Enter: Create  Esc: Cancel",
-            Style::default().fg(Color::DarkGray),
+            "Tab/\u{2191}\u{2193}: Switch field  Enter: Create  Esc: Cancel",
+            theme::muted(),
         ))
     } else {
         let invalid = input.invalid_field_names();
-        let fix_text = format!("Fix: {}  Tab/↑↓: Switch  Esc: Cancel", invalid.join(", "));
-        Line::from(Span::styled(fix_text, Style::default().fg(Color::Red)))
+        let fix_text = format!(
+            "Fix: {}  Tab/\u{2191}\u{2193}: Switch  Esc: Cancel",
+            invalid.join(", ")
+        );
+        Line::from(Span::styled(fix_text, theme::error()))
     };
 
     let lines = vec![
-        Line::from(Span::styled(
-            "Create SSH Port Forward",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled("Create SSH Port Forward", theme::title())),
         Line::from(""),
         Line::from(vec![
             Span::styled("Local Port:  ", field_style(ForwardField::LocalPort)),
@@ -543,7 +554,7 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
                     input.remote_host.as_str(),
                     field_style(ForwardField::RemoteHost),
                 ),
-                Span::styled(" (container IP)", Style::default().fg(Color::DarkGray)),
+                Span::styled(" (container IP)", theme::muted()),
             ]
         } else {
             vec![
@@ -567,7 +578,7 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
             vec![
                 Span::styled("SSH Host:    ", field_style(ForwardField::SshHost)),
                 Span::styled(input.ssh_host.as_str(), field_style(ForwardField::SshHost)),
-                Span::styled(" (locked)", Style::default().fg(Color::DarkGray)),
+                Span::styled(" (locked)", theme::muted()),
             ]
         } else {
             vec![
@@ -580,12 +591,7 @@ fn draw_forward_popup(frame: &mut Frame, app: &App) {
         footer,
     ];
 
-    let paragraph = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("New Forward")
-            .style(Style::default().bg(Color::Black)),
-    );
+    let paragraph = Paragraph::new(lines).block(theme::popup_block("New Forward"));
     frame.render_widget(paragraph, area);
 }
 
@@ -600,12 +606,7 @@ fn draw_connections_popup(frame: &mut Frame, app: &App) {
     }
 
     let mut lines = vec![
-        Line::from(Span::styled(
-            "Connections",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled("Connections", theme::title())),
         Line::from(""),
     ];
 
@@ -616,9 +617,7 @@ fn draw_connections_popup(frame: &mut Frame, app: &App) {
         let active_marker = if is_active { " *" } else { "" };
 
         let style = if is_selected {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
+            theme::highlight()
         } else {
             Style::default()
         };
@@ -628,7 +627,6 @@ fn draw_connections_popup(frame: &mut Frame, app: &App) {
             style,
         )));
 
-        // Show remote/docker details
         let mut details = Vec::new();
         if let Some(ref host) = conn.remote_host {
             details.push(format!("remote: {host}"));
@@ -639,7 +637,7 @@ fn draw_connections_popup(frame: &mut Frame, app: &App) {
         if !details.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!("    {}", details.join("  ")),
-                Style::default().fg(Color::DarkGray),
+                theme::muted(),
             )));
         }
     }
@@ -647,15 +645,10 @@ fn draw_connections_popup(frame: &mut Frame, app: &App) {
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "[j/k] Navigate  [Enter] Switch  [a] Add  [d] Delete  [Esc] Close",
-        Style::default().fg(Color::DarkGray),
+        theme::muted(),
     )));
 
-    let paragraph = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Connections")
-            .style(Style::default().bg(Color::Black)),
-    );
+    let paragraph = Paragraph::new(lines).block(theme::popup_block("Connections"));
     frame.render_widget(paragraph, area);
 }
 
@@ -666,14 +659,12 @@ fn draw_connection_add_form(frame: &mut Frame, app: &App, area: Rect) {
     let field_style = |field: ConnectionField| {
         if field == active {
             if field == ConnectionField::Name && !input.is_name_valid() {
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                theme::error_bold()
             } else {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                theme::highlight()
             }
         } else if field == ConnectionField::Name && !input.is_name_valid() {
-            Style::default().fg(Color::Red)
+            theme::error()
         } else {
             Style::default().fg(Color::White)
         }
@@ -681,17 +672,8 @@ fn draw_connection_add_form(frame: &mut Frame, app: &App, area: Rect) {
 
     let cursor = |field: ConnectionField| {
         if field == active {
-            let color = if field == ConnectionField::Name && !input.is_name_valid() {
-                Color::Red
-            } else {
-                Color::Yellow
-            };
-            Span::styled(
-                "_",
-                Style::default()
-                    .fg(color)
-                    .add_modifier(Modifier::SLOW_BLINK),
-            )
+            let valid = field != ConnectionField::Name || input.is_name_valid();
+            Span::styled("_", theme::cursor(valid))
         } else {
             Span::raw("")
         }
@@ -700,22 +682,17 @@ fn draw_connection_add_form(frame: &mut Frame, app: &App, area: Rect) {
     let footer = if input.is_valid() {
         Line::from(Span::styled(
             "[Tab] Next field  [Enter] Save  [Esc] Cancel",
-            Style::default().fg(Color::DarkGray),
+            theme::muted(),
         ))
     } else {
         Line::from(Span::styled(
             "Name is required  [Tab] Next field  [Esc] Cancel",
-            Style::default().fg(Color::Red),
+            theme::error(),
         ))
     };
 
     let lines = vec![
-        Line::from(Span::styled(
-            "New Connection",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled("New Connection", theme::title())),
         Line::from(""),
         Line::from(vec![
             Span::styled("Name:           ", field_style(ConnectionField::Name)),
@@ -747,18 +724,13 @@ fn draw_connection_add_form(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "(Remote Host / Docker Target are optional)",
-            Style::default().fg(Color::DarkGray),
+            theme::muted(),
         )),
         Line::from(""),
         footer,
     ];
 
-    let paragraph = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("New Connection")
-            .style(Style::default().bg(Color::Black)),
-    );
+    let paragraph = Paragraph::new(lines).block(theme::popup_block("New Connection"));
     frame.render_widget(paragraph, area);
 }
 
@@ -769,68 +741,35 @@ fn draw_presets_popup(frame: &mut Frame, app: &App) {
 
     if app.presets.is_empty() {
         let lines = vec![
-            Line::from(Span::styled(
-                "No Presets",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )),
+            Line::from(Span::styled("No Presets", theme::highlight())),
             Line::from(""),
             Line::from("Create presets in:"),
             Line::from(Span::styled(
                 "~/.config/quay/presets.toml",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(theme::BRAND),
             )),
             Line::from(""),
             Line::from("Example:"),
-            Line::from(Span::styled(
-                "[[preset]]",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "name = \"My Server\"",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "local_port = 8080",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "remote_host = \"localhost\"",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "remote_port = 80",
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(Span::styled(
-                "ssh_host = \"myserver\"",
-                Style::default().fg(Color::DarkGray),
-            )),
+            Line::from(Span::styled("[[preset]]", theme::muted())),
+            Line::from(Span::styled("name = \"My Server\"", theme::muted())),
+            Line::from(Span::styled("local_port = 8080", theme::muted())),
+            Line::from(Span::styled("remote_host = \"localhost\"", theme::muted())),
+            Line::from(Span::styled("remote_port = 80", theme::muted())),
+            Line::from(Span::styled("ssh_host = \"myserver\"", theme::muted())),
             Line::from(""),
             Line::from(vec![
-                Span::styled("[Esc] ", Style::default().fg(Color::DarkGray)),
+                Span::styled("[Esc] ", theme::muted()),
                 Span::raw("Close"),
             ]),
         ];
 
-        let paragraph = Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Presets")
-                .style(Style::default().bg(Color::Black)),
-        );
+        let paragraph = Paragraph::new(lines).block(theme::popup_block("Presets"));
         frame.render_widget(paragraph, area);
         return;
     }
 
     let mut lines = vec![
-        Line::from(Span::styled(
-            "SSH Forward Presets",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled("SSH Forward Presets", theme::title())),
         Line::from(""),
     ];
 
@@ -838,9 +777,7 @@ fn draw_presets_popup(frame: &mut Frame, app: &App) {
         let is_selected = i == app.preset_selected;
         let prefix = if is_selected { "> " } else { "  " };
         let style = if is_selected {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
+            theme::highlight()
         } else {
             Style::default()
         };
@@ -859,21 +796,16 @@ fn draw_presets_popup(frame: &mut Frame, app: &App) {
                 "    {}:{} -> {}:{}",
                 preset.local_port, preset.ssh_host, preset.remote_host, preset.remote_port
             ),
-            Style::default().fg(Color::DarkGray),
+            theme::muted(),
         )));
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "j/k: Navigate  Enter: Launch  Esc: Cancel",
-        Style::default().fg(Color::DarkGray),
+        theme::muted(),
     )));
 
-    let paragraph = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Presets")
-            .style(Style::default().bg(Color::Black)),
-    );
+    let paragraph = Paragraph::new(lines).block(theme::popup_block("Presets"));
     frame.render_widget(paragraph, area);
 }

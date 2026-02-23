@@ -6,6 +6,7 @@ mod forward;
 mod event;
 mod port;
 mod preset;
+mod theme;
 mod ui;
 
 use anyhow::Result;
@@ -102,6 +103,7 @@ fn activate_connection_ui(app: &mut App) {
     app.entries.clear();
     app.apply_filter();
     app.selected = 0;
+    app.loading = true;
     let name = app.active_connection()
         .map_or("Unknown", |c| c.name.as_str()).to_string();
     app.set_status(&format!("Switched to: {name}"));
@@ -220,6 +222,7 @@ fn apply_activation_result(app: &mut App, result: ActivationResult) {
     if app.active_connection != result.active_connection {
         return; // stale result, discard
     }
+    app.loading = false;
     app.container_ip = result.container_ip.or(app.container_ip.take());
     if let Some(status) = result.restore_status {
         app.set_status(&status);
@@ -238,6 +241,7 @@ fn apply_refresh_result(app: &mut App, result: RefreshResult) {
     if app.active_connection != result.active_connection {
         return;
     }
+    app.loading = false;
     match result.entries {
         Ok(entries) => {
             if app.set_entries(entries) {
@@ -852,10 +856,12 @@ pub(crate) async fn run_tui_with_entries(
     // Load initial data
     if let Some(entries) = initial {
         app.set_entries(entries);
+        app.loading = false;
         app.set_status("[mock] Loaded mock data");
     } else {
         restore_forwards(&mut app).await;
         refresh_and_save(&mut app).await;
+        app.loading = false;
     }
 
     // Main loop
@@ -1091,6 +1097,7 @@ pub(crate) async fn run_tui_with_entries(
                         Action::FilterDocker => app.set_filter(Filter::Docker),
                         Action::Refresh => {
                             if !mock_mode {
+                                app.loading = true;
                                 spawn_refresh(&app, &mut refresh_handle, activation_handle.as_ref(), &refresh_tx);
                                 app.set_status("Refreshing...");
                             }
