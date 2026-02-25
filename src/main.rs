@@ -52,13 +52,27 @@ async fn refresh_and_save(app: &mut App) {
     }
 }
 
-async fn resolve_container_ip(app: &mut App) {
+async fn resolve_container_info(app: &mut App) {
     if let Some(ref target) = app.docker_target {
-        match port::docker::get_container_ip(target, app.remote_host.as_deref()).await {
-            Ok(ip) => app.container_ip = Some(ip),
-            Err(e) => app.set_status(&format!("Container IP lookup failed: {e}")),
+        match port::docker::get_container_info(target, app.remote_host.as_deref()).await {
+            Ok(info) => {
+                app.container_ip = Some(info.ip);
+                app.docker_port_mappings = info.port_mappings;
+            }
+            Err(e) => app.set_status(&format!("Container info lookup failed: {e}")),
         }
     }
+}
+
+fn resolve_docker_forward(
+    container_port: u16,
+    docker_port_mappings: &HashMap<u16, u16>,
+    container_ip: Option<&str>,
+) -> Option<(String, u16)> {
+    if let Some(&host_port) = docker_port_mappings.get(&container_port) {
+        return Some(("localhost".to_string(), host_port));
+    }
+    container_ip.map(|ip| (ip.to_string(), container_port))
 }
 
 #[allow(clippy::unused_async)]
@@ -73,15 +87,6 @@ async fn restore_forwards(app: &mut App) {
         return;
     }
 
-    let remote_target = if app.is_docker_target() {
-        match app.container_ip.as_deref() {
-            Some(ip) => ip.to_string(),
-            None => return,
-        }
-    } else {
-        "localhost".to_string()
-    };
-
     let mut restored = 0u32;
     let mut failed = 0u32;
 
@@ -89,7 +94,19 @@ async fn restore_forwards(app: &mut App) {
         if forward::is_port_listening(local_port) {
             continue;
         }
-        let spec = format!("{local_port}:{remote_target}:{container_port}");
+        let (remote_target, remote_port) = if app.is_docker_target() {
+            match resolve_docker_forward(
+                container_port,
+                &app.docker_port_mappings,
+                app.container_ip.as_deref(),
+            ) {
+                Some(pair) => pair,
+                None => continue,
+            }
+        } else {
+            ("localhost".to_string(), container_port)
+        };
+        let spec = format!("{local_port}:{remote_target}:{remote_port}");
         match port::ssh::create_forward(&spec, &host, false) {
             Ok(_) => restored += 1,
             Err(_) => failed += 1,
@@ -128,6 +145,7 @@ struct ActivationInput {
 struct ActivationResult {
     active_connection: usize,
     container_ip: Option<String>,
+    docker_port_mappings: HashMap<u16, u16>,
     restore_status: Option<String>,
     entries: anyhow::Result<Vec<PortEntry>>,
 }
@@ -153,19 +171,11 @@ fn restore_forwards_standalone(
     forwards: &HashMap<u16, u16>,
     is_docker_target: bool,
     container_ip: Option<&str>,
+    docker_port_mappings: &HashMap<u16, u16>,
 ) -> Option<String> {
     if forwards.is_empty() {
         return None;
     }
-
-    let remote_target = if is_docker_target {
-        match container_ip {
-            Some(ip) => ip.to_string(),
-            None => return None,
-        }
-    } else {
-        "localhost".to_string()
-    };
 
     let mut restored = 0u32;
     let mut failed = 0u32;
@@ -174,7 +184,15 @@ fn restore_forwards_standalone(
         if forward::is_port_listening(local_port) {
             continue;
         }
-        let spec = format!("{local_port}:{remote_target}:{container_port}");
+        let (remote_target, remote_port) = if is_docker_target {
+            match resolve_docker_forward(container_port, docker_port_mappings, container_ip) {
+                Some(pair) => pair,
+                None => continue,
+            }
+        } else {
+            ("localhost".to_string(), container_port)
+        };
+        let spec = format!("{local_port}:{remote_target}:{remote_port}");
         match port::ssh::create_forward(&spec, host, false) {
             Ok(_) => restored += 1,
             Err(_) => failed += 1,
@@ -191,13 +209,14 @@ fn restore_forwards_standalone(
 }
 
 async fn run_activation(input: ActivationInput) -> ActivationResult {
-    // 1. Resolve container IP
-    let container_ip = if let Some(ref target) = input.docker_target {
-        port::docker::get_container_ip(target, input.remote_host.as_deref())
-            .await
-            .ok()
+    // 1. Resolve container info (IP + port mappings)
+    let (container_ip, docker_port_mappings) = if let Some(ref target) = input.docker_target {
+        match port::docker::get_container_info(target, input.remote_host.as_deref()).await {
+            Ok(info) => (Some(info.ip), info.port_mappings),
+            Err(_) => (None, HashMap::new()),
+        }
     } else {
-        None
+        (None, HashMap::new())
     };
 
     // 2. Restore forwards (sync, fast)
@@ -209,6 +228,7 @@ async fn run_activation(input: ActivationInput) -> ActivationResult {
             forwards,
             input.is_docker_target,
             container_ip.as_deref(),
+            &docker_port_mappings,
         )
     } else {
         None
@@ -225,6 +245,7 @@ async fn run_activation(input: ActivationInput) -> ActivationResult {
     ActivationResult {
         active_connection: input.active_connection,
         container_ip,
+        docker_port_mappings,
         restore_status,
         entries,
     }
@@ -236,6 +257,9 @@ fn apply_activation_result(app: &mut App, result: ActivationResult) {
     }
     app.loading = false;
     app.container_ip = result.container_ip.or(app.container_ip.take());
+    if !result.docker_port_mappings.is_empty() {
+        app.docker_port_mappings = result.docker_port_mappings;
+    }
     if let Some(status) = result.restore_status {
         app.set_status(&status);
     }
@@ -503,17 +527,18 @@ fn handle_quick_forward(app: &mut App, mock_mode: bool) -> bool {
         return false;
     };
 
-    let forward_target = if app.is_docker_target() {
-        if let Some(ip) = app.container_ip.as_deref() {
-            ip.to_string()
-        } else {
-            app.set_status("Container IP not available");
-            return false;
+    let (forward_target, remote_port) = if app.is_docker_target() {
+        match resolve_docker_forward(port, &app.docker_port_mappings, app.container_ip.as_deref()) {
+            Some(pair) => pair,
+            None => {
+                app.set_status("Container IP not available");
+                return false;
+            }
         }
     } else {
-        "localhost".to_string()
+        ("localhost".to_string(), port)
     };
-    let spec = format!("{port}:{forward_target}:{port}");
+    let spec = format!("{port}:{forward_target}:{remote_port}");
 
     if mock_mode {
         let mock_entry = PortEntry {
@@ -803,8 +828,8 @@ pub(crate) async fn run_tui_with_entries(
     app.remote_host = remote_host;
     app.docker_target = docker_target;
 
-    // Resolve container IP for docker target mode
-    resolve_container_ip(&mut app).await;
+    // Resolve container info (IP + port mappings) for docker target mode
+    resolve_container_info(&mut app).await;
 
     // Apply config settings
     if !mock_mode {
@@ -1151,18 +1176,23 @@ pub(crate) async fn run_tui_with_entries(
                             app.forward_input = match (
                                 app.selected_entry(),
                                 app.remote_host.as_deref(),
-                                app.container_ip.as_deref(),
                             ) {
-                                // Docker target + remote: pre-fill container_ip as remote_host, lock ssh_host to remote_host
-                                (Some(entry), Some(host), Some(ip)) => {
+                                (Some(entry), Some(host)) if app.is_docker_target() => {
                                     let mut input = ForwardInput::for_remote_entry(entry, host);
-                                    input.remote_host = ip.to_string();
+                                    if let Some((target, rport)) = resolve_docker_forward(
+                                        entry.local_port,
+                                        &app.docker_port_mappings,
+                                        app.container_ip.as_deref(),
+                                    ) {
+                                        input.remote_host = target;
+                                        input.remote_port = rport.to_string();
+                                    }
                                     input
                                 }
-                                (Some(entry), Some(host), None) => {
+                                (Some(entry), Some(host)) => {
                                     ForwardInput::for_remote_entry(entry, host)
                                 }
-                                (Some(entry), None, _) => ForwardInput::from_entry(entry),
+                                (Some(entry), None) => ForwardInput::from_entry(entry),
                                 _ => ForwardInput::new(),
                             };
                             app.popup = Popup::Forward;

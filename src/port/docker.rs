@@ -5,6 +5,11 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::process::Command;
 
+pub struct ContainerInfo {
+    pub ip: String,
+    pub port_mappings: HashMap<u16, u16>, // container_port -> host_port
+}
+
 const TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const TUNNEL_PROPAGATION_DELAY: Duration = Duration::from_millis(100);
 
@@ -251,10 +256,12 @@ fn parse_ss_output(output: &str, container_name: &str) -> Vec<PortEntry> {
     entries
 }
 
-/// Get the IP address of a Docker container.
-/// Uses `docker inspect` to retrieve the container's IP from its network settings.
-pub async fn get_container_ip(container: &str, remote_host: Option<&str>) -> Result<String> {
-    let inspect_fmt = "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}";
+/// Get the IP address and port mappings of a Docker container.
+/// Uses `docker inspect` to retrieve the container's IP and port mappings in one call.
+pub async fn get_container_info(container: &str, remote_host: Option<&str>) -> Result<ContainerInfo> {
+    let inspect_fmt = r#"{{range .NetworkSettings.Networks}}IP:{{.IPAddress}}
+{{end}}{{range $p, $conf := .NetworkSettings.Ports}}{{range $conf}}PORT:{{$p}}->{{.HostIp}}:{{.HostPort}}
+{{end}}{{end}}"#;
     let output = match remote_host {
         Some(host) => {
             ssh_cmd_tokio(host, &["docker", "inspect", "-f", inspect_fmt, container])
@@ -272,17 +279,45 @@ pub async fn get_container_ip(container: &str, remote_host: Option<&str>) -> Res
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!(
-            "Failed to get container IP for '{}': {}",
+            "Failed to inspect container '{}': {}",
             container,
             stderr.trim()
         );
     }
 
-    let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if ip.is_empty() {
-        anyhow::bail!("Container '{container}' has no IP address");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_container_info(&stdout)
+}
+
+fn parse_container_info(output: &str) -> Result<ContainerInfo> {
+    let mut ip = String::new();
+    let mut port_mappings = HashMap::new();
+    let port_re = Regex::new(r"^PORT:(\d+)/\w+->.*:(\d+)$")?;
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(addr) = trimmed.strip_prefix("IP:") {
+            let addr = addr.trim();
+            if !addr.is_empty() && ip.is_empty() {
+                ip = addr.to_string();
+            }
+        } else if let Some(caps) = port_re.captures(trimmed) {
+            if let (Ok(container_port), Ok(host_port)) =
+                (caps[1].parse::<u16>(), caps[2].parse::<u16>())
+            {
+                port_mappings.entry(container_port).or_insert(host_port);
+            }
+        }
     }
-    Ok(ip)
+
+    if ip.is_empty() {
+        anyhow::bail!("Container has no IP address");
+    }
+
+    Ok(ContainerInfo { ip, port_mappings })
 }
 
 /// Parse `ss -tn state established dst IP` output to count connections per peer port.
@@ -363,7 +398,7 @@ pub async fn detect_forward_mappings(
     ssh_ports: &[u16],
     container_ports: &HashSet<u16>,
 ) -> Result<HashMap<u16, u16>> {
-    let container_ip = get_container_ip(container, Some(remote_host)).await?;
+    let container_ip = get_container_info(container, Some(remote_host)).await?.ip;
     let mut result: HashMap<u16, u16> = HashMap::new();
     let mut detected_container_ports: HashSet<u16> = HashSet::new();
 
@@ -619,5 +654,71 @@ Recv-Q Send-Q  Local Address:Port   Peer Address:Port Process
         let counts = parse_ss_peer_port_counts(output);
         assert_eq!(counts.get(&1234), Some(&2));
         assert_eq!(counts.get(&3000), Some(&1));
+    }
+
+    #[test]
+    fn test_parse_container_info_basic() {
+        let output = "\
+IP:172.28.0.2
+PORT:5173/tcp->0.0.0.0:5173
+PORT:3000/tcp->0.0.0.0:3000
+";
+        let info = parse_container_info(output).unwrap();
+        assert_eq!(info.ip, "172.28.0.2");
+        assert_eq!(info.port_mappings.len(), 2);
+        assert_eq!(info.port_mappings.get(&5173), Some(&5173));
+        assert_eq!(info.port_mappings.get(&3000), Some(&3000));
+    }
+
+    #[test]
+    fn test_parse_container_info_different_host_port() {
+        let output = "\
+IP:172.28.0.3
+PORT:80/tcp->0.0.0.0:8080
+PORT:443/tcp->0.0.0.0:8443
+";
+        let info = parse_container_info(output).unwrap();
+        assert_eq!(info.ip, "172.28.0.3");
+        assert_eq!(info.port_mappings.get(&80), Some(&8080));
+        assert_eq!(info.port_mappings.get(&443), Some(&8443));
+    }
+
+    #[test]
+    fn test_parse_container_info_no_port_mappings() {
+        let output = "IP:172.28.0.2\n";
+        let info = parse_container_info(output).unwrap();
+        assert_eq!(info.ip, "172.28.0.2");
+        assert!(info.port_mappings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_container_info_no_ip() {
+        let output = "PORT:5173/tcp->0.0.0.0:5173\n";
+        assert!(parse_container_info(output).is_err());
+    }
+
+    #[test]
+    fn test_parse_container_info_multiple_networks() {
+        // First IP should be used
+        let output = "\
+IP:172.28.0.2
+IP:172.29.0.5
+PORT:3000/tcp->0.0.0.0:3000
+";
+        let info = parse_container_info(output).unwrap();
+        assert_eq!(info.ip, "172.28.0.2");
+    }
+
+    #[test]
+    fn test_parse_container_info_duplicate_container_port() {
+        // IPv4 and IPv6 bindings for same container port — first wins
+        let output = "\
+IP:172.28.0.2
+PORT:5173/tcp->0.0.0.0:5173
+PORT:5173/tcp->::: :5173
+";
+        let info = parse_container_info(output).unwrap();
+        assert_eq!(info.port_mappings.len(), 1);
+        assert_eq!(info.port_mappings.get(&5173), Some(&5173));
     }
 }

@@ -259,6 +259,7 @@ pub struct App {
     pub remote_host: Option<String>,
     pub docker_target: Option<String>,
     pub container_ip: Option<String>,
+    pub docker_port_mappings: HashMap<u16, u16>, // container_port -> host_port
     pub connections: Vec<Connection>,
     pub active_connection: usize,
     pub connection_selected: usize,
@@ -293,6 +294,7 @@ impl App {
             remote_host: None,
             docker_target: None,
             container_ip: None,
+            docker_port_mappings: HashMap::new(),
             connections: vec![Connection::local()],
             active_connection: 0,
             connection_selected: 0,
@@ -480,6 +482,7 @@ impl App {
             self.remote_host = conn.remote_host.clone();
             self.docker_target = conn.docker_target.clone();
             self.container_ip = None;
+            self.docker_port_mappings.clear();
         }
     }
 
