@@ -528,13 +528,13 @@ fn handle_quick_forward(app: &mut App, mock_mode: bool) -> bool {
     };
 
     let (forward_target, remote_port) = if app.is_docker_target() {
-        match resolve_docker_forward(port, &app.docker_port_mappings, app.container_ip.as_deref()) {
-            Some(pair) => pair,
-            None => {
-                app.set_status("Container IP not available");
-                return false;
-            }
-        }
+        let Some(pair) =
+            resolve_docker_forward(port, &app.docker_port_mappings, app.container_ip.as_deref())
+        else {
+            app.set_status("Container IP not available");
+            return false;
+        };
+        pair
     } else {
         ("localhost".to_string(), port)
     };
@@ -1173,28 +1173,26 @@ pub(crate) async fn run_tui_with_entries(
                             app.popup = Popup::Help;
                         }
                         Action::StartForward => {
-                            app.forward_input = match (
-                                app.selected_entry(),
-                                app.remote_host.as_deref(),
-                            ) {
-                                (Some(entry), Some(host)) if app.is_docker_target() => {
-                                    let mut input = ForwardInput::for_remote_entry(entry, host);
-                                    if let Some((target, rport)) = resolve_docker_forward(
-                                        entry.local_port,
-                                        &app.docker_port_mappings,
-                                        app.container_ip.as_deref(),
-                                    ) {
-                                        input.remote_host = target;
-                                        input.remote_port = rport.to_string();
+                            app.forward_input =
+                                match (app.selected_entry(), app.remote_host.as_deref()) {
+                                    (Some(entry), Some(host)) if app.is_docker_target() => {
+                                        let mut input = ForwardInput::for_remote_entry(entry, host);
+                                        if let Some((target, rport)) = resolve_docker_forward(
+                                            entry.local_port,
+                                            &app.docker_port_mappings,
+                                            app.container_ip.as_deref(),
+                                        ) {
+                                            input.remote_host = target;
+                                            input.remote_port = rport.to_string();
+                                        }
+                                        input
                                     }
-                                    input
-                                }
-                                (Some(entry), Some(host)) => {
-                                    ForwardInput::for_remote_entry(entry, host)
-                                }
-                                (Some(entry), None) => ForwardInput::from_entry(entry),
-                                _ => ForwardInput::new(),
-                            };
+                                    (Some(entry), Some(host)) => {
+                                        ForwardInput::for_remote_entry(entry, host)
+                                    }
+                                    (Some(entry), None) => ForwardInput::from_entry(entry),
+                                    _ => ForwardInput::new(),
+                                };
                             app.popup = Popup::Forward;
                         }
                         Action::ShowPresets => {
@@ -1269,10 +1267,8 @@ pub(crate) async fn run_tui_with_entries(
                         match action {
                             Action::Up => app.previous(),
                             Action::Down => app.next(),
-                            Action::SelectRow(row) => {
-                                if row < app.filtered_entries.len() {
-                                    app.selected = row;
-                                }
+                            Action::SelectRow(row) if row < app.filtered_entries.len() => {
+                                app.selected = row;
                             }
                             _ => {}
                         }
