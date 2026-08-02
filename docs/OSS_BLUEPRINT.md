@@ -32,7 +32,7 @@ categories = ["command-line-utilities", "network-programming"]
 keywords = ["tui", "port-manager", "docker", "ssh", "ratatui"]
 ```
 
-### 2.2 cargo-dist によるバイナリ配布
+### 2.2 バイナリ配布 (`.github/workflows/release.yml`)
 
 #### ビルドターゲット
 
@@ -60,7 +60,7 @@ brew tap username/quay
 brew install quay
 ```
 
-cargo-dist が Formula を自動生成・更新:
+release.yml の `publish-homebrew` ジョブが Formula を自動生成・更新:
 1. GitHub Releases へアーカイブアップロード
 2. SHA256 ハッシュ取得
 3. `quay.rb` Formula 生成
@@ -95,15 +95,17 @@ release-plz検知 → PR作成 (chore: release v0.2.0)
         ↓
 メンテナがマージ → タグ作成 → Crates.io公開
         ↓
-cargo-dist起動 → バイナリビルド → GitHub Release作成
+タグ push で release.yml 起動 → バイナリビルド → GitHub Release作成
 ```
 
 ### 3.2 役割分担
 
 | ツール | 担当 |
 |--------|------|
-| release-plz | タグ作成、Changelog生成、Crates.io公開 |
-| cargo-dist | バイナリビルド、GitHub Release作成、Homebrew更新 |
+| release-plz | バージョン更新PR、Changelog生成、タグ作成、Crates.io公開 |
+| release.yml | バイナリビルド、GitHub Release作成、Homebrew更新、シェルインストーラー配布 |
+
+crates.io への publish は release-plz が単独で担当する。release.yml 側で `cargo publish` を実行すると二重公開になり失敗するため、追加してはいけない。
 
 ### 3.3 Conventional Commits
 
@@ -160,35 +162,22 @@ chore: メンテナンス
 dependencies_update = true
 allow_dirty = false
 
-[workspace.changelog]
-config = "cliff.toml"
-
 [[package]]
-name = "quay"
+name = "quay-tui"          # Cargo.toml の package.name と一致させる
 git_tag_enable = true
-git_release_enable = false  # cargo-distに任せる
+git_release_enable = false # GitHub Release は release.yml が作る
 publish = true
-```
 
-### 5.2 Cargo.toml (cargo-dist)
-
-```toml
-[workspace.metadata.dist]
-cargo-dist-version = "0.10.0"
-ci = "github"
-targets = [
-    "x86_64-unknown-linux-musl",
-    "aarch64-unknown-linux-musl",
-    "x86_64-apple-darwin",
-    "aarch64-apple-darwin"
+[changelog]                # changelog_config + cliff.toml は非推奨
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
+commit_parsers = [
+    { message = "^feat", group = "Features" },
+    { message = "^fix", group = "Bug Fixes" },
 ]
-installers = ["shell", "homebrew"]
-tap = "username/homebrew-quay"
-publish-jobs = ["homebrew"]
-checksum = "sha256"
 ```
 
-### 5.3 renovate.json
+### 5.2 renovate.json
 
 ```json
 {
@@ -265,7 +254,7 @@ body:
 ## 7. 実装フェーズ
 
 ### Phase 1: 基盤整備
-- [x] cargo-dist 設定
+- [x] release.yml (バイナリビルド・配布) 設定
 - [x] release-plz 設定
 - [x] GitHub Actions ワークフロー
 
@@ -290,9 +279,7 @@ body:
 
 | ツール | 用途 | URL |
 |--------|------|-----|
-| cargo-dist | バイナリ配布 | https://opensource.axo.dev/cargo-dist/ |
-| release-plz | リリース自動化 | https://release-plz.ieni.dev/ |
+| release-plz | リリース自動化・Changelog 生成 | https://release-plz.dev/ |
 | cargo-deb | Debian パッケージ | https://github.com/kornelski/cargo-deb |
-| git-cliff | Changelog 生成 | https://git-cliff.org/ |
 | Renovate | 依存関係管理 | https://docs.renovatebot.com/ |
 | cargo-audit | セキュリティ監査 | https://github.com/RustSec/rustsec |

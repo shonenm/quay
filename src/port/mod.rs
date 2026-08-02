@@ -371,9 +371,9 @@ mod tests {
 
     /// Simulates the SSH tunnel merge logic used in Docker Target remote mode:
     /// In remote mode, probe is skipped (it would false-positive on SSH tunnel
-    /// local_ports), so accessibility is determined solely by SSH tunnel
-    /// remote_port matching the container's listening port.
-    /// e.g. `ssh -L 3000:container_ip:8080` → remote_port=8080 matches Docker port 8080.
+    /// `local_ports`), so accessibility is determined solely by SSH tunnel
+    /// `remote_port` matching the container's listening port.
+    /// e.g. `ssh -L 3000:container_ip:8080` → `remote_port=8080` matches Docker port 8080.
     #[test]
     fn test_ssh_tunnel_merge_marks_matching_ports_open() {
         // Docker entries from remote container (all start with is_open=false, no probe)
@@ -386,7 +386,7 @@ mod tests {
         // SSH tunnel: local_port=3000, remote_port=8080 (forwards to container port 8080)
         // Without the fix, probing 127.0.0.1:3000 would succeed (tunnel listens there)
         // and Docker port 3000 would be marked open — a false positive.
-        let ssh_entries = vec![{
+        let ssh_entries = [{
             let mut e = make_entry(PortSource::Ssh, 3000);
             e.remote_port = Some(8080);
             e

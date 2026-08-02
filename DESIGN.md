@@ -293,7 +293,7 @@ quay dev check 3000 8080        # ポート開閉チェック
 15. [x] エラーハンドリング
 16. [x] 自動更新
 17. [x] README
-18. [x] Homebrew formula (cargo-dist)
+18. [x] Homebrew formula (release.yml の publish-homebrew ジョブ)
 
 ### Phase 6: 拡張機能
 19. [x] 設定ファイル基盤 (config.rs)

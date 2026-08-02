@@ -45,21 +45,6 @@ shell-escape = "0.1"
 toml = "0.8"
 user_dirs = "0.1"
 
-# cargo-dist configuration
-[package.metadata.dist]
-cargo-dist-version = "0.27.0"
-ci = "github"
-targets = [
-    "x86_64-unknown-linux-musl",
-    "aarch64-unknown-linux-musl",
-    "x86_64-apple-darwin",
-    "aarch64-apple-darwin"
-]
-installers = ["shell", "homebrew"]
-tap = "shonenm/homebrew-quay"
-publish-jobs = ["homebrew"]
-checksum = "sha256"
-
 # cargo-deb configuration
 [package.metadata.deb]
 maintainer = "matsushimakouta"
@@ -89,7 +74,3 @@ must_use_candidate = "allow"
 opt-level = 3
 lto = true
 strip = true
-
-[profile.dist]
-inherits = "release"
-lto = "thin"

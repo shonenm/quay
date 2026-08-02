@@ -258,10 +258,13 @@ fn parse_ss_output(output: &str, container_name: &str) -> Vec<PortEntry> {
 
 /// Get the IP address and port mappings of a Docker container.
 /// Uses `docker inspect` to retrieve the container's IP and port mappings in one call.
-pub async fn get_container_info(container: &str, remote_host: Option<&str>) -> Result<ContainerInfo> {
-    let inspect_fmt = r#"{{range .NetworkSettings.Networks}}IP:{{.IPAddress}}
+pub async fn get_container_info(
+    container: &str,
+    remote_host: Option<&str>,
+) -> Result<ContainerInfo> {
+    let inspect_fmt = r"{{range .NetworkSettings.Networks}}IP:{{.IPAddress}}
 {{end}}{{range $p, $conf := .NetworkSettings.Ports}}{{range $conf}}PORT:{{$p}}->{{.HostIp}}:{{.HostPort}}
-{{end}}{{end}}"#;
+{{end}}{{end}}";
     let output = match remote_host {
         Some(host) => {
             ssh_cmd_tokio(host, &["docker", "inspect", "-f", inspect_fmt, container])
@@ -596,7 +599,7 @@ LISTEN 0      511     0.0.0.0:5173        0.0.0.0:*
         assert!(entries.iter().all(|e| e.is_open));
 
         // Simulate the reset that collect_all() performs
-        for entry in entries.iter_mut() {
+        for entry in &mut entries {
             entry.is_open = false;
         }
         assert!(entries.iter().all(|e| !e.is_open));
