@@ -1,23 +1,46 @@
 # release-plz configuration
-# https://release-plz.ieni.dev/
+# https://release-plz.dev/docs/config
 
 [workspace]
-# Update dependencies in lockfile
+# Update all dependencies in the lockfile, not just workspace members
 dependencies_update = true
 # Don't allow uncommitted changes
 allow_dirty = false
 
-# Changelog configuration
-[workspace.changelog]
-# Use git-cliff for changelog generation
-config = "cliff.toml"
-
-# Package-specific configuration
 [[package]]
-name = "quay"
-# Enable git tagging
+name = "quay-tui"
+# Create the git tag. Pushing it triggers .github/workflows/release.yml,
+# which builds the binaries and creates the GitHub Release.
 git_tag_enable = true
-# Disable GitHub release creation (handled by cargo-dist)
+# GitHub Release is created by release.yml (it attaches the built binaries)
 git_release_enable = false
-# Publish to crates.io
+# release-plz owns the crates.io publish; release.yml must not run `cargo publish`
 publish = true
+
+# Changelog generation. Configured here rather than in a git-cliff config file,
+# because the `changelog_config` field is deprecated.
+# https://release-plz.dev/docs/config#the-changelog-section
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+"""
+tag_pattern = "v[0-9].*"
+sort_commits = "oldest"
+commit_parsers = [
+    { message = "^feat", group = "Features" },
+    { message = "^fix", group = "Bug Fixes" },
+    { message = "^doc", group = "Documentation" },
+    { message = "^perf", group = "Performance" },
+    { message = "^refactor", group = "Refactor" },
+    { message = "^style", group = "Styling" },
+    { message = "^test", group = "Testing" },
+    { message = "^chore\\(release\\)", skip = true },
+    { message = "^chore\\(deps\\)", skip = true },
+    { message = "^chore", group = "Miscellaneous" },
+    { message = "^ci", group = "CI/CD" },
+    # Drop anything that isn't a conventional commit
+    { message = "^.*", skip = true },
+]
