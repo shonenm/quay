@@ -1,6 +1,8 @@
 # Release workflow
-# Triggered by pushing a version tag (e.g., v1.0.0)
-# Builds binaries for 4 targets, creates GitHub Release, publishes to crates.io, updates Homebrew tap
+# Triggered by the version tag that release-plz pushes (e.g., v1.0.0)
+# Builds binaries for 4 targets, creates the GitHub Release, updates the Homebrew tap
+# and uploads the shell installer.
+# crates.io publishing is owned by release-plz — see release-plz.toml.
 
 name: Release
 
@@ -169,17 +171,6 @@ jobs:
           body_path: release_body.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Publish to crates.io
-  publish-crates-io:
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo publish
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   # Update Homebrew tap
   publish-homebrew:
